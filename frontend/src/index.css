@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Mirrors src/theme.ts — see that file for what each accent means. */
+    --teal: #0f766e;
+    --ember: #c2410c;
+    --ocean: #0369a1;
+    --moss: #15803d;
+    --rose: #be123c;
+    --gold: #b45309;
+
+    --page: #f4efe6;
+    --card: #fbf7ef;
+    --sunk: #f0e9dc;
+    --border: #e3d8c4;
+    --ink: #2b2318;
+  }
+
+  html,
+  body,
+  #root {
+    background-color: var(--page);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Focus stays visible for keyboard users without boxing in mouse clicks. */
+  :focus-visible {
+    outline: 2px solid var(--ocean);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Entrance animations. Kept small and quick — the point is to soften a
+     transition, not to make anyone wait for it. */
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .animate-rise {
+    animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .animate-fade {
+    animation: fade 0.4s ease both;
+  }
+
+  .animate-slide-in {
+    animation: slide-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .delay-1 {
+    animation-delay: 0.06s;
+  }
+  .delay-2 {
+    animation-delay: 0.12s;
+  }
+  .delay-3 {
+    animation-delay: 0.18s;
+  }
+  .delay-4 {
+    animation-delay: 0.24s;
+  }
+
+  /* Soft colour wash used behind hero sections. */
+  .aurora {
+    background-image:
+      radial-gradient(42rem 22rem at 12% -8%, rgba(20, 184, 166, 0.16), transparent 60%),
+      radial-gradient(38rem 20rem at 88% -6%, rgba(234, 124, 60, 0.16), transparent 60%),
+      radial-gradient(34rem 20rem at 50% 108%, rgba(3, 105, 161, 0.12), transparent 62%);
+  }
+
+  .lift {
+    transition:
+      transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.25s ease;
+  }
+
+  .lift:hover {
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .lift:hover {
+    transform: none;
+  }
+}
