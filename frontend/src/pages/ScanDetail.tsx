@@ -134,8 +134,11 @@ export default function ScanDetail() {
   const fast = snap?.fast_result ?? null;
   const target = fast?.target || snap?.id || "";
   const aiOk = !!snap?.ai_analyzed;
-  const riskLevel: RiskLevel = aiOk ? snap!.final_risk : "";
-  const riskScore = aiOk ? snap!.risk_score : 0;
+  // The deterministic engine owns the score; the AI layer only narrates it.
+  const sentinel = snap?.sentinel_risk;
+  const riskLevel: RiskLevel = (sentinel?.severity?.toLowerCase() ??
+    (aiOk ? snap!.final_risk : "")) as RiskLevel;
+  const riskScore = sentinel?.score ?? (aiOk ? snap!.risk_score : 0);
   const riskFactors: RiskFactor[] = snap?.risk_factors ?? [];
 
   // Severity distribution: prefer Groq's statistics, else derive from findings.
@@ -408,6 +411,63 @@ export default function ScanDetail() {
             {snap.ai_error || "AI analysis unavailable."}
           </p>
         )
+      )}
+
+      {/* Sentinel Risk — deterministic score with its contributors.
+          Scans predating the risk engine carry an empty object, so the guard
+          checks for real content rather than mere truthiness. */}
+      {sentinel && typeof sentinel.score === "number" && (
+        <Panel title={`Sentinel Overall Risk — ${sentinel.score}/100 ${sentinel.severity}`}>
+          <p className="mb-1 text-sm text-[#4a4032]">
+            {sentinel.explanation ?? ""}
+          </p>
+          <p className="mb-4 text-xs text-[#948972]">
+            {sentinel.methodology ?? "Sentinel Risk Model"} ·{" "}
+            {sentinel.findings_considered ?? 0} finding(s) considered
+            {(sentinel.third_party_excluded ?? 0) > 0 &&
+              ` · ${sentinel.third_party_excluded} third-party observation(s) excluded`}
+          </p>
+          <ul className="space-y-2">
+            {(sentinel.contributors ?? []).map((c, i) => (
+              <li
+                key={c.finding_id + i}
+                className="rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] p-3"
+              >
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="text-xs font-bold text-[#6f6552]">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span className="text-sm font-semibold text-[#2b2318]">
+                    {c.title}
+                  </span>
+                  {c.cvss && (
+                    <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                      style={{ background: "#be123c22", color: "#be123c" }}>
+                      CVSS v4.0 {c.cvss.base_score} {c.cvss.severity}
+                    </span>
+                  )}
+                  {c.hardening && (
+                    <span className="rounded bg-[#b4530922] px-1.5 py-0.5 text-[10px] font-semibold text-[#b45309]">
+                      Hardening
+                    </span>
+                  )}
+                  <span className="ml-auto text-xs text-[#6f6552]">
+                    +{c.contribution} contribution
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-[#6f6552]">
+                  Confidence {Math.round(c.confidence * 100)}% ·{" "}
+                  {c.affected_urls} endpoint(s) · {c.detection_status}
+                  {c.cvss?.vector && (
+                    <span className="block break-all font-mono text-[10px] text-[#948972]">
+                      {c.cvss.vector}
+                    </span>
+                  )}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       )}
 
       {/* Risk Factors (Groq) */}

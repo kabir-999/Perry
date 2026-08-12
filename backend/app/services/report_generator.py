@@ -53,7 +53,9 @@ def build_report(scan: Scan, findings: list[Finding]) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_id": str(scan.id),
         "target": scan.target.base_url if scan.target else "",
-        "risk_score": scan.risk_score if scan.ai_analyzed else None,
+        # One score for dashboard and report alike: the deterministic engine's.
+        "risk_score": scan.risk_score,
+        "sentinel_risk": json.loads(scan.sentinel_risk_json or "{}"),
         "risk_level": scan.final_risk if scan.ai_analyzed else None,
         "ai": _ai_block(scan),
         "discovery": {

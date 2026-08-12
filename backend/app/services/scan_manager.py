@@ -33,11 +33,18 @@ from app.schemas.scan import ScanCreate
 from app.services import deep_scan as deep_scan_module
 from app.services.deep_scan import DeepScanResult, run_deep_scan
 from app.services.fast_scanner import FastScanResult, run_fast_scan
+from app.services.reachability import dependency_severity
 from app.services.report_generator import build_report, render_report_json
 from app.services.scan_broker import scan_broker
 from app.services.scope import TargetScope, build_scope
+from app.services import target_verification as tv
+from app.models.verified_target import AuditLog, VerifiedTarget
 
 logger = logging.getLogger("scanner.manager")
+
+
+class UnverifiedTargetError(PermissionError):
+    """Active testing was requested against an unverified deployment."""
 
 # Scan columns the emit() callback is allowed to patch directly.
 _PATCHABLE_COLUMNS = {
@@ -71,6 +78,16 @@ def scan_snapshot(scan: Scan) -> dict:
         test_results = json.loads(scan.test_results_json) if scan.test_results_json else []
     except (ValueError, TypeError):
         test_results = []
+    try:
+        sentinel_risk = (
+            json.loads(scan.sentinel_risk_json) if scan.sentinel_risk_json else None
+        )
+    except (ValueError, TypeError):
+        sentinel_risk = None
+    # An empty object is indistinguishable from "no data" on the client, so
+    # normalise it away.
+    if not sentinel_risk:
+        sentinel_risk = None
     return {
         "id": str(scan.id),
         "status": scan.status,
@@ -97,6 +114,7 @@ def scan_snapshot(scan: Scan) -> dict:
         "checks_done": checks_done,
         "fast_result": fast_result,
         "repo_info": repo_info,
+        "sentinel_risk": sentinel_risk,
         "passive_only": scan.passive_only,
     }
 
@@ -145,6 +163,53 @@ class ScanManager:
         scope = build_scope(payload.target_url)
         target = await self.get_or_create_target(db, scope)
 
+        # --- Authorization boundary -------------------------------------
+        # Active testing sends crafted payloads at a live host, so it runs
+        # only against a deployment whose control the user has demonstrated.
+        # A local/private address is the developer's own machine and needs no
+        # challenge. Everything else without a VERIFIED target is downgraded
+        # to PASSIVE: ordinary requests only, nothing crafted.
+        wants_active = payload.is_authorized
+        authorization_status = tv.UNVERIFIED
+        scan_type = "PASSIVE_WEB"
+
+        if tv.is_local_target(scope.hostname):
+            authorization_status = "LOCAL"
+            scan_type = "AUTHORIZED_DEPLOYMENT" if wants_active else "PASSIVE_WEB"
+            allowed = True
+        else:
+            verified = None
+            if user_id is not None:
+                verified = (await db.execute(
+                    select(VerifiedTarget).where(
+                        VerifiedTarget.user_id == user_id,
+                        VerifiedTarget.hostname == scope.hostname,
+                    )
+                )).scalar_one_or_none()
+            allowed, reason = tv.is_active_testing_allowed(verified)
+            if verified is not None:
+                authorization_status = verified.verification_status
+            if allowed:
+                scan_type = "AUTHORIZED_DEPLOYMENT"
+
+        if wants_active and not allowed:
+            # Refuse to run the active half rather than silently doing it.
+            raise UnverifiedTargetError(
+                "Target verification required. Sentinel scans applications "
+                "that you own or are authorized to test. Verify this "
+                f"deployment ({scope.hostname}) before starting an active "
+                "security scan."
+            )
+
+        active_enabled = wants_active and allowed
+        db.add(AuditLog(
+            user_id=user_id,
+            action="active_scan_started" if active_enabled else "passive_scan_started",
+            target=scope.hostname,
+            result="allowed",
+            detail=f"scan_type={scan_type}; authorization={authorization_status}",
+        ))
+
         scan = Scan(
             target_id=target.id,
             user_id=user_id,
@@ -156,7 +221,9 @@ class ScanManager:
             repo_url=(payload.repo_url or "").strip()[:2048],
             # Without a confirmed authorization statement the scan stays
             # read-only: discovery and passive checks, no attack payloads.
-            passive_only=not payload.is_authorized,
+            passive_only=not active_enabled,
+            scan_type=scan_type,
+            authorization_status=authorization_status,
         )
         db.add(scan)
         await db.flush()
@@ -403,22 +470,23 @@ class ScanManager:
                             finding_type="dependency",
                             file="package.json",
                             line=0,
-                            # Severity follows the exploitability
-                            # classification, not the advisory alone.
-                            severity=(
-                                df.severity
-                                if df.classification == "potentially_exploitable"
-                                else "low"
+                            # Severity follows the reachability ladder, not the
+                            # advisory's own rating.
+                            severity=dependency_severity(
+                                df.classification, df.severity
                             ),
                             # Static analysis never confirms exploitability.
                             confidence="potential",
                             evidence=(
                                 f"Package: {df.package} {df.version} "
-                                f"({'direct' if df.is_direct else 'transitive'})\n"
+                                f"({df.dependency_kind})\n"
                                 f"Vulnerable range: {df.affected_versions or 'unspecified'}\n"
                                 f"Patched version: {df.fixed_version or 'none published'}\n"
-                                f"Used in source: {'yes' if df.is_used else 'no'}\n"
-                                f"Externally reachable: {df.reachability_text}"
+                                f"Package imported: {'yes' if df.is_used else 'no'}\n"
+                                f"Vulnerable functionality used: "
+                                f"{'yes' if df.functionality_used else 'no'}\n"
+                                f"Reachable from attacker-controlled input: "
+                                f"{'yes' if df.reachable_from_input else 'no path found'}"
                             ),
                             package=df.package[:256],
                             version=df.version[:64],
@@ -429,7 +497,9 @@ class ScanManager:
                             vulnerable_range=df.affected_versions[:128],
                             is_direct=df.is_direct,
                             is_used=df.is_used,
-                            externally_reachable=df.reachability_text[:64],
+                            externally_reachable=(
+                                "yes" if df.reachable_from_input else "no path found"
+                            ),
                         )
                     )
 
@@ -471,6 +541,7 @@ class ScanManager:
             scan.ai_error = deep.ai_error
             scan.final_risk = deep.final_risk
             scan.risk_score = deep.risk_score
+            scan.sentinel_risk_json = json.dumps(deep.sentinel_risk or {})
             scan.ai_summary = deep.ai_summary
             scan.ai_recommendation = deep.ai_recommendation
             scan.risk_factors_json = json.dumps(

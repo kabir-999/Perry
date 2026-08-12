@@ -151,8 +151,40 @@ export interface ScanSnapshot {
   checks_done: string[];
   fast_result: FastResult | null;
   repo_info: RepoInfo | null;
+  /** Sentinel Risk Model v1 — deterministic, authoritative score. */
+  sentinel_risk?: SentinelRisk;
   /** Read-only scan: active injection tests were not run. */
   passive_only?: boolean;
+}
+
+export interface RiskContributor {
+  finding_id: string;
+  title: string;
+  type: "VULNERABILITY" | "SECURITY_HARDENING" | "INFORMATIONAL";
+  confidence: number;
+  affected_urls: number;
+  detection_status: string;
+  contribution: number;
+  contribution_note: string;
+  cvss?: {
+    version: string;
+    vector: string;
+    base_score: number;
+    severity: string;
+    undetermined_metrics: string[];
+  };
+  hardening?: { model: string; rule: string; base_impact: number };
+}
+
+export interface SentinelRisk {
+  /** Absent on scans that ran before the risk engine existed. */
+  score?: number;
+  severity?: string;
+  methodology?: string;
+  findings_considered?: number;
+  third_party_excluded?: number;
+  contributors?: RiskContributor[];
+  explanation?: string;
 }
 
 export interface Subdomain {

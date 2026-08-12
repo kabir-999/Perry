@@ -39,6 +39,13 @@ class FindingCandidate:
     affected_urls: int = 1
     affected_url_samples: list[str] = field(default_factory=list)
 
+    # Scope attribution. A finding whose evidence came from a third-party
+    # origin is reported, but never counted against the target.
+    origin: str = ""
+    scope_status: str = ""
+    evidence_url: str = ""
+    contributes_to_risk: bool = True
+
     # Exploitability classification — see services/dependency_analysis.py for
     # the vocabulary. Empty for findings where it does not apply.
     exploitability: str = ""

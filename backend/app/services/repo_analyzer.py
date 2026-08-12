@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ from app.services.dependency_analysis import (
     parse_osv_vulnerability,
     read_declared_dependencies,
 )
+from app.services.sast_engine import analyze_sources
 from app.services.reachability import (
     analyze_reachability,
     classify as classify_reachability,
@@ -23,6 +25,8 @@ from app.services.repo_discovery import RepoCandidate
 from app.services.repo_correlator import SourceFinding, DependencyFinding
 from app.services.secret_redactor import SECRET_KEY_PATTERNS, _looks_like_secret, redact_env_values
 from app.services.scope import TargetScope
+
+logger = logging.getLogger("scanner.repo")
 
 try:
     import git
@@ -79,7 +83,9 @@ async def analyze_repository(repo: RepoCandidate, scope: TargetScope) -> RepoAna
         
         # Run analyzers
         result.secret_findings = _scan_secrets(repo_path, files_to_analyze)
-        result.code_findings = _scan_code_security(repo_path, files_to_analyze)
+        # AST-based taint analysis replaces keyword matching: a finding needs
+        # a traced path from attacker input to a dangerous sink.
+        result.code_findings = _sast_findings(repo_path, files_to_analyze)
         
         # Run SCA concurrently since it makes network requests. Usage analysis
         # needs the same file list, so advisories can be classified by whether
@@ -152,6 +158,34 @@ def _clone_error_message(raw: str) -> str:
     if "could not resolve host" in lowered or "network" in lowered:
         return "Could not reach the repository host. Check network connectivity."
     return "Could not download the repository for analysis."
+
+
+def _sast_findings(repo_path: Path, files: list[Path]) -> list[SourceFinding]:
+    """Run the AST engine and express each taint path as a SourceFinding."""
+    out: list[SourceFinding] = []
+    for f in analyze_sources(repo_path, files):
+        # A sanitizer on the path lowers severity but does not erase the
+        # finding — whether it neutralises this attack class is the
+        # developer's call, made with the evidence in front of them.
+        severity = "low" if f.sanitized else f.rule.impact
+        out.append(
+            SourceFinding(
+                finding_type=f.rule.vuln_class,
+                file=f.file,
+                line=f.line,
+                severity=severity,
+                confidence="potential",
+                evidence=(
+                    f"{f.rule.cwe} — taint path:\n{f.attack_path()}"
+                    + (f"\nSanitizers applied: {', '.join(f.sanitizers)}"
+                       if f.sanitizers else "")
+                ),
+                secret_type="",
+                redacted_value="",
+                code_context=f.code,
+            )
+        )
+    return out
 
 
 def _gather_files(repo_path: Path) -> list[Path]:
@@ -386,6 +420,7 @@ async def _query_osv(
 ) -> list[DependencyFinding]:
     """Query OSV.dev for known advisories affecting the pinned versions."""
     findings: list[DependencyFinding] = []
+    skipped_not_affected: list[str] = []
     if not deps:
         return findings
 
@@ -427,7 +462,17 @@ async def _query_osv(
             usage = analyze_usage(repo_path, files, package, ecosystem, declared)
 
             for vuln in vulns:
-                details = parse_osv_vulnerability(vuln, package)
+                details = parse_osv_vulnerability(vuln, package, clean_version)
+
+                # Strict range validation. OSV is queried with a version, but
+                # we re-verify locally: an advisory whose affected ranges do
+                # not contain the installed version is not a finding at all.
+                if not details["affected"]:
+                    skipped_not_affected.append(
+                        f"{package}@{clean_version}: {details['advisory_id']} "
+                        f"({details['range_reason']})"
+                    )
+                    continue
 
                 # Which functionality does the advisory actually blame, and can
                 # request data reach it? Neither is inferred from the import.
@@ -471,4 +516,11 @@ async def _query_osv(
                 # One advisory per package keeps the report readable.
                 break
 
+    if skipped_not_affected:
+        logger.info(
+            "Dropped %d advisor%s failing version-range validation: %s",
+            len(skipped_not_affected),
+            "y" if len(skipped_not_affected) == 1 else "ies",
+            "; ".join(skipped_not_affected[:5]),
+        )
     return findings

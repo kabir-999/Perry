@@ -38,6 +38,7 @@ from pathlib import Path
 
 # The five-state ladder lives in reachability.py; re-exported so every caller
 # shares one vocabulary.
+from app.services.version_ranges import RangeMatch, evaluate
 from app.services.reachability import (
     CLASSIFICATION_LABEL,
     CLASSIFICATION_MEANING,
@@ -299,46 +300,73 @@ def analyze_usage(
 # --------------------------------------------------------------------- OSV
 
 
-def parse_osv_vulnerability(vuln: dict, package: str) -> dict:
-    """Pull the version facts and real severity out of an OSV record.
-
-    OSV reports severity in several places and none of them are guaranteed, so
-    the caller gets an explicit empty string rather than a fabricated default.
-    """
-    introduced: list[str] = []
-    fixed: list[str] = []
-
-    for affected in vuln.get("affected", []) or []:
-        if not isinstance(affected, dict):
+def _first_range(vuln: dict, package: str) -> str:
+    """Describe the advisory's first range, for display when no installed
+    version is available to validate against."""
+    for entry in vuln.get("affected", []) or []:
+        if not isinstance(entry, dict):
             continue
-        name = ((affected.get("package") or {}).get("name") or "").lower()
-        if name and package.lower() not in name:
+        name = ((entry.get("package") or {}).get("name") or "").lower()
+        if name and name != package.lower():
             continue
-        for rng in affected.get("ranges", []) or []:
+        for rng in entry.get("ranges", []) or []:
+            if str((rng or {}).get("type", "")).upper() == "GIT":
+                continue
+            low = high = ""
             for event in (rng or {}).get("events", []) or []:
                 if not isinstance(event, dict):
                     continue
                 if event.get("introduced"):
-                    introduced.append(str(event["introduced"]))
+                    low = str(event["introduced"])
                 if event.get("fixed"):
-                    fixed.append(str(event["fixed"]))
+                    high = str(event["fixed"])
+            if low or high:
+                return f">={low or '0'}, <{high}" if high else f">={low or '0'}"
+    return ""
 
-    if introduced and fixed:
-        vulnerable_range = f">={introduced[0]}, <{fixed[0]}"
-    elif introduced:
-        vulnerable_range = f">={introduced[0]}"
-    elif fixed:
-        vulnerable_range = f"<{fixed[0]}"
+
+def parse_osv_vulnerability(vuln: dict, package: str, installed: str = "") -> dict:
+    """Pull the version facts and real severity out of an OSV record.
+
+    The vulnerable range reported is the interval the *installed* version
+    falls in. An advisory typically carries one range per maintained major
+    branch, so quoting the first one prints a range the version is not in.
+    """
+    if installed:
+        match = evaluate(vuln, package, installed)
     else:
-        vulnerable_range = ""
+        # No installed version to test against (display-only callers). Fall
+        # back to describing the advisory's first range rather than returning
+        # nothing — but never claim the range was validated.
+        match = RangeMatch(True, vulnerable_range=_first_range(vuln, package),
+                           reason="no installed version supplied; range not validated")
+
+    fixed = match.fixed_version
+    if not fixed:
+        # Fall back to the fixed version of the matching branch, if any.
+        for entry in vuln.get("affected", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            name = ((entry.get("package") or {}).get("name") or "").lower()
+            if name and name != package.lower():
+                continue
+            for rng in entry.get("ranges", []) or []:
+                for event in (rng or {}).get("events", []) or []:
+                    if isinstance(event, dict) and event.get("fixed"):
+                        candidate = str(event["fixed"])
+                        if match.vulnerable_range.endswith(f"<{candidate}"):
+                            fixed = candidate
+                            break
 
     return {
         "advisory_id": str(vuln.get("id") or ""),
         "summary": str(vuln.get("summary") or "")[:300],
-        "vulnerable_range": vulnerable_range,
-        "fixed_version": fixed[0] if fixed else "",
+        "vulnerable_range": match.vulnerable_range,
+        "fixed_version": fixed,
         "severity": _osv_severity(vuln),
         "aliases": [str(a) for a in (vuln.get("aliases") or [])][:4],
+        "affected": match.affected,
+        "range_reason": match.reason,
     }
 
 

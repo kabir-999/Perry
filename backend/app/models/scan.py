@@ -71,6 +71,10 @@ class Scan(Base):
     # Read-only scan: no active injection payloads were sent. Set when the
     # user did not confirm authorization for the target.
     passive_only: Mapped[bool] = mapped_column(default=False)
+    # LOCAL_CODE | CI_CD | AUTHORIZED_DEPLOYMENT | PASSIVE_WEB
+    scan_type: Mapped[str] = mapped_column(String(32), default="PASSIVE_WEB")
+    # Verification state of the target at the time the scan ran.
+    authorization_status: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")
     final_risk: Mapped[str] = mapped_column(String(16), default="")
 
     # Deep-scan progress (0-100) and running discovery/finding counters.
@@ -102,6 +106,8 @@ class Scan(Base):
     risk_factors_json: Mapped[str] = mapped_column(Text, default="")
     # Full security-test matrix (every test + outcome), serialized as JSON.
     test_results_json: Mapped[str] = mapped_column(Text, default="")
+    # Sentinel Risk Model v1 output: score, band, and contributors.
+    sentinel_risk_json: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -96,7 +96,12 @@ def overall_risk(findings: list[FindingCandidate]) -> str:
     findings exist. Twenty low-confidence advisories stay Low; one
     demonstrated injection is High on its own.
     """
-    live = [f for f in findings if f.confidence != "false_positive"]
+    # Third-party observations never move the target's risk level.
+    live = [
+        f for f in findings
+        if f.confidence != "false_positive"
+        and getattr(f, "contributes_to_risk", True)
+    ]
     if not live:
         return "minimal"
 

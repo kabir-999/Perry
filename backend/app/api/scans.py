@@ -21,7 +21,7 @@ from app.schemas.repository import RepositoryRead, SourceFindingRead
 from app.schemas.scan import ScanCreate, ScanEventRead, ScanRead
 from app.services.auth import decode_access_token, require_developer
 from app.services.scan_broker import scan_broker
-from app.services.scan_manager import scan_manager, scan_snapshot
+from app.services.scan_manager import UnverifiedTargetError, scan_manager, scan_snapshot
 from app.services.scope import InvalidTargetError
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -55,6 +55,13 @@ async def create_scan(
         scan = await scan_manager.create_scan(db, payload, user_id=user.id)
     except InvalidTargetError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except UnverifiedTargetError as exc:
+        # 403 with the action the user must take, not a generic refusal.
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "target_verification_required", "message": str(exc),
+                    "action": "verify_target"},
+        )
     return scan
 
 

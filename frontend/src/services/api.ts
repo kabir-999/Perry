@@ -67,6 +67,45 @@ export const authApi = {
   me: () => client.get<User>("/auth/me").then((r) => r.data),
 };
 
+export interface VerificationChallenge {
+  method: string;
+  record_name?: string;
+  record_type?: string;
+  record_value?: string;
+  url?: string;
+  file_path?: string;
+  file_content?: string;
+  instruction: string;
+}
+
+export interface TargetRead {
+  id: string;
+  hostname: string;
+  verification_status: string;
+  verification_method: string;
+  active_testing_enabled: boolean;
+  last_error: string;
+}
+
+export const targetsApi = {
+  add: (url: string, method: "dns" | "http") =>
+    client
+      .post<{ target: TargetRead; verification: VerificationChallenge }>(
+        "/targets",
+        { url, method },
+      )
+      .then((r) => r.data),
+
+  verify: (targetId: string) =>
+    client
+      .post<{ verified: boolean; detail: string; target: TargetRead }>(
+        `/targets/${targetId}/verify`,
+      )
+      .then((r) => r.data),
+
+  list: () => client.get<TargetRead[]>("/targets").then((r) => r.data),
+};
+
 export const scansApi = {
   create: (payload: CreateScanPayload) =>
     client.post<Scan>("/scans", payload).then((r) => r.data),

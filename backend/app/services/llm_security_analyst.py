@@ -69,6 +69,43 @@ _SYSTEM_PROMPT = (
     "vulnerable functionality is used (and where), and whether a path from "
     "attacker-controlled input was found. All of these are in the dependency "
     "object — do not guess any of them.\n\n"
+    "SCOPE. The payload separates `findings` (the target's own) from "
+    "`third_party_observations` (responses from external services such as an "
+    "Atlassian login page or a GitHub repository, reached from the target). "
+    "Your summary, risk factors, statistics, and score must be built ONLY from "
+    "`findings`. Never attribute a third-party observation to the target — "
+    "saying 'the target has missing security headers' when the evidence came "
+    "from atlassian.net is factually wrong. You may mention third-party "
+    "observations in a separate sentence, explicitly named as an external "
+    "service and excluded from the target's risk.\n\n"
+    "SOURCE CODE. `source_code_analysis.available` tells you whether a "
+    "repository was actually analysed. When it is false, say source-code "
+    "analysis was not available — never report 'no code issues found', which "
+    "claims a clean result that was never established.\n\n"
+    "TECHNOLOGY. Detecting Cloudflare, nginx, Apache, React, etc. is "
+    "informational. It is not information exposure and not a vulnerability. "
+    "Only a disclosed version number is a finding.\n\n"
+    "HSTS. Do not describe a missing Strict-Transport-Security header as proof "
+    "that a downgrade attack exists. Say that browsers which have not "
+    "previously received an HSTS policy may be more exposed to downgrade or "
+    "first-connection interception. Keep 'HTTP available', 'HTTP redirects to "
+    "HTTPS', 'HSTS present' and 'HSTS missing' as distinct facts.\n\n"
+    "COVERAGE CLAIMS. Never write that the rest of the site is secure or that "
+    "all other pages have proper headers — the scan tested a sample. Say what "
+    "was tested and what passed, e.g. 'missing headers were identified on a "
+    "subset of in-scope URLs; other tested controls passed and no active "
+    "exploitation was demonstrated'.\n\n"
+    "CONSISTENCY. Each finding carries scanner_severity, and the payload "
+    "carries scanner_max_severity. The severity you give a risk factor MUST "
+    "match the scanner_severity of the finding it describes — you may lower it "
+    "if the evidence is weaker than the scanner assumed, but never raise it. "
+    "The same issue must not appear as Low in one place and Medium in another.\n\n"
+    "ATTACK SURFACE. A finding that a separate application responds on a "
+    "dev/admin/staging host is a discovery about exposure, not a vulnerability. "
+    "Report it as an exposed development/admin surface and state that "
+    "authentication, reachable admin functions, debug mode, and data exposure "
+    "were NOT tested. Do not describe consequences that would only follow if "
+    "those untested conditions were true.\n\n"
     "MISSING SECURITY HEADERS are Low by default. They are weakened "
     "defence-in-depth, not attacks. Raise one above Low ONLY if another finding "
     "with evidence_strength=demonstrated shows the attack that header would "
@@ -180,7 +217,7 @@ class SecurityAnalyst:
             )
         return self._client
 
-    async def analyze(self, summary: dict) -> tuple[SecurityAssessment | None, str]:
+    async def analyze(self, summary: dict) -> tuple[SecurityAssessment | None, str]:  # noqa: C901
         """Run one Groq call. Returns (assessment, "") on success or
         (None, user_facing_reason) on failure — never a fabricated score."""
         if not self.enabled:
@@ -215,7 +252,9 @@ class SecurityAnalyst:
 
             assessment = self._parse(raw)
             if assessment is not None:
-                return self._normalize(assessment), ""
+                return self._normalize(
+                    assessment, summary.get("scanner_max_severity", "")
+                ), ""
             last_error = REASON_INVALID
             # nudge the retry to be stricter
             messages.append(
@@ -229,13 +268,13 @@ class SecurityAnalyst:
         return None, last_error
 
     @staticmethod
-    def _normalize(a: SecurityAssessment) -> SecurityAssessment:
+    def _normalize(a: SecurityAssessment, scanner_max: str = "") -> SecurityAssessment:
         a.risk_score = max(0, min(100, int(a.risk_score)))
         for rf in a.risk_factors:
             sev = (rf.severity or "").strip().lower()
             rf.severity = sev if sev in _LEVELS else "low"
 
-        _enforce_evidence_policy(a)
+        _enforce_evidence_policy(a, scanner_max)
 
         level = (a.risk_level or "").strip().lower()
         if level not in _LEVELS:
@@ -290,14 +329,19 @@ def _cap_level(level: str, ceiling: str) -> str:
         return ceiling
 
 
-def _enforce_evidence_policy(a: SecurityAssessment) -> None:
+def _enforce_evidence_policy(a: SecurityAssessment, scanner_max: str = "") -> None:
     """Hold the assessment to the evidence it was given.
 
     Two rules: a factor may not exceed the certainty its evidence supports,
     and the overall score may not exceed the strongest single factor — so a
     long list of advisories cannot add up to a Critical site.
     """
+    # The analyst cannot rate anything above the scanner's own worst finding.
+    ceiling_from_scanner = scanner_max if scanner_max in _LEVELS else None
+
     for rf in a.risk_factors:
+        if ceiling_from_scanner:
+            rf.severity = _cap_level(rf.severity, ceiling_from_scanner)
         strength = (rf.evidence_strength or "").strip().lower()
         exploitability = (rf.exploitability or "").strip().lower()
 

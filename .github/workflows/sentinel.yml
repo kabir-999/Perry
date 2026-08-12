@@ -1,0 +1,39 @@
+name: Sentinel Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Sentinel
+        run: pip install -r backend/requirements.txt
+
+      # The repository invokes Sentinel against its own checkout, which is
+      # what establishes the authorization context — no target verification
+      # is involved because no external host is touched.
+      - name: Run Sentinel
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m app.cli scan "$GITHUB_WORKSPACE" \
+            --fail-on high \
+            --max-risk 70 \
+            --json "$GITHUB_WORKSPACE/sentinel-report.json"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-report
+          path: sentinel-report.json

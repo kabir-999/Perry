@@ -351,3 +351,35 @@ def classify(evidence: ReachabilityEvidence, *, is_used: bool) -> str:
     if evidence.functionality_used:
         return FUNCTIONALITY_USED
     return DEPENDENCY_PRESENT
+
+
+# Severity ceiling per rung of the ladder. The advisory's own rating may only
+# lower the result, never raise it past the ceiling.
+_LADDER_CEILING = {
+    DEPENDENCY_PRESENT: "low",
+    FUNCTIONALITY_USED: "low",
+    REACHABLE_FROM_INPUT: "medium",
+    POTENTIALLY_EXPLOITABLE: "high",
+    CONFIRMED_EXPLOITABLE: "critical",
+}
+
+_SEVERITY_RANK = ["info", "low", "medium", "high", "critical"]
+
+
+def dependency_severity(classification: str, advisory_severity: str = "") -> str:
+    """The severity to report for one dependency advisory.
+
+    Single source of truth: the finding shown in the UI, the row written to
+    source_findings, and anything else derived from a dependency all call this,
+    so the same advisory cannot appear with two different severities in two
+    different panels.
+    """
+    ceiling = _LADDER_CEILING.get(classification, "low")
+    advisory = (advisory_severity or "").strip().lower()
+    if advisory not in _SEVERITY_RANK:
+        return ceiling
+    return (
+        advisory
+        if _SEVERITY_RANK.index(advisory) < _SEVERITY_RANK.index(ceiling)
+        else ceiling
+    )

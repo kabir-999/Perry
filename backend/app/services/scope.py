@@ -122,6 +122,13 @@ def _public_suffix(hostname: str) -> str | None:
     return best
 
 
+# Where a URL sits relative to the scan target.
+SAME_ORIGIN = "SAME_ORIGIN"
+SAME_SITE = "SAME_SITE"
+EXTERNAL = "EXTERNAL"
+OUT_OF_SCOPE = "OUT_OF_SCOPE"
+
+
 def _registrable_suffix(hostname: str) -> str:
     """An eTLD+1 approximation good enough for scoping subdomains.
 
@@ -191,6 +198,45 @@ class TargetScope:
         if self.port:
             netloc = f"{self.hostname}:{self.port}"
         return f"{self.scheme}://{netloc}"
+
+    def classify_origin(self, url: str) -> str:
+        """Where a discovered URL sits relative to the target.
+
+        A finding is only the target's responsibility when the evidence came
+        from the target's own origin (or an in-scope sibling). A response from
+        github.com or atlassian.net describes *that* service, no matter how the
+        scanner arrived at it.
+        """
+        try:
+            parts = urlparse(url)
+        except ValueError:
+            return OUT_OF_SCOPE
+        host = (parts.hostname or "").rstrip(".").lower()
+        if not host:
+            return OUT_OF_SCOPE
+
+        port = parts.port
+        scheme = (parts.scheme or "").lower()
+        if host == self.hostname:
+            # Same host: an origin match also needs scheme and port to agree.
+            same_port = (port or (443 if scheme == "https" else 80)) == (
+                self.port or (443 if self.scheme == "https" else 80)
+            )
+            if scheme == self.scheme and same_port:
+                return SAME_ORIGIN
+            return SAME_SITE
+
+        if host in self.allowed_hosts:
+            return SAME_SITE
+        if self.is_ip:
+            return EXTERNAL
+        if host == self.base_domain or host.endswith("." + self.base_domain):
+            return SAME_SITE
+        return EXTERNAL
+
+    def contributes_to_risk(self, url: str) -> bool:
+        """Only first-party evidence may move the target's risk score."""
+        return self.classify_origin(url) in (SAME_ORIGIN, SAME_SITE)
 
     def in_scope(self, url: str) -> bool:
         """True if ``url`` is on an allowed host (same host, or a subdomain

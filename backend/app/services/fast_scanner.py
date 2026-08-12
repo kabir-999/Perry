@@ -172,6 +172,10 @@ async def _run(scope: TargetScope, fetcher: Fetcher) -> FastScanResult:
     )
     result.http_available = http_probe.ok
     result.security_headers = _header_presence(home)
+    # Technology detection is informational: knowing a site runs Cloudflare or
+    # nginx is not a finding, and must never be reported as information
+    # exposure. Only a disclosed *version* is a finding, and that is handled by
+    # check_server_disclosure().
     result.technology = [
         v for v in (home.headers.get("server", ""), home.headers.get("x-powered-by", "")) if v
     ]

@@ -138,6 +138,13 @@ def apply_policy(findings: list[FindingCandidate]) -> None:
                     "that would limit the damage of another flaw."
                 )
 
+        # --- Attack-surface observations ---------------------------------
+        # "A separate app answers on admin.example.com" is a fact about
+        # exposure, not a demonstrated weakness in it. Capped at Low so a
+        # discovery can never present as a vulnerability.
+        if f.category == "attack_surface":
+            f.severity = _cap(f.severity, "low")
+
         # --- Dependency advisories ---------------------------------------
         if f.category == "dependency_vulnerability":
             classification = f.exploitability or DEPENDENCY_PRESENT

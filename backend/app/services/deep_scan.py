@@ -32,6 +32,13 @@ from app.services.llm_security_analyst import (
 from app.services.parameter_discovery import consolidate_parameters
 from app.services.response_analyzer import analyze, learn_not_found_profile
 from app.services.risk_engine import score_all
+from app.services.security_graph import build_graph
+from app.services.risk_model import calculate_sentinel_risk
+from app.services.scope_policy import (
+    attribute as attribute_scope,
+    observation_payload,
+    split as split_scope,
+)
 from app.services.severity_policy import apply_policy
 from app.services.scan_summary import build_scan_summary
 from app.services.scope import TargetScope
@@ -39,6 +46,7 @@ from app.services.security_test_cases import enabled_parameter_test_cases
 from app.services.subdomain_scanner import DiscoveredSubdomain, discover_subdomains
 from app.services.vhost_scanner import discover_vhosts
 from app.services.reachability import (
+    dependency_severity,
     CLASSIFICATION_LABEL,
     CLASSIFICATION_MEANING,
     DEPENDENCY_PRESENT,
@@ -47,7 +55,8 @@ from app.services.reachability import (
     REACHABLE_FROM_INPUT,
 )
 from app.services.js_analyzer import analyze_bundles
-from app.services.repo_discovery import discover_repository, parse_repo_url, RepoCandidate
+from app.services.sast_engine import RULES as _SAST_RULES
+from app.services.repo_discovery import parse_repo_url
 from app.services.repo_analyzer import analyze_repository, RepoAnalysisResult
 from app.services.repo_correlator import correlate
 
@@ -71,6 +80,14 @@ class DeepScanResult:
     test_results: list[dict] = field(default_factory=list)
     requests_made: int = 0
     repo_info: dict | None = None
+    # Security graph + graph-derived risk (deterministic; the AI analyst
+    # refines the narrative, not the structure).
+    graph_summary: dict = field(default_factory=dict)
+    graph_risk: dict = field(default_factory=dict)
+    # Authoritative deterministic risk (Sentinel Risk Model v1).
+    sentinel_risk: dict = field(default_factory=dict)
+    # Findings observed on external services: reported, never scored.
+    third_party_observations: list[dict] = field(default_factory=list)
     source_findings: list[FindingCandidate] = field(default_factory=list)
     raw_repo_analysis: RepoAnalysisResult | None = None
     # AI assessment (authoritative risk comes only from here).
@@ -157,17 +174,19 @@ async def run_deep_scan(
         crawl_params = consolidate_parameters(crawl_result.params)
         
         async def repo_pipeline():
-            # Source analysis is the developer-only half of the pipeline.
+            """Analyze source only when the user supplied a repository.
+
+            Source-code analysis runs on an explicit opt-in and nothing else.
+            Without a repo URL the scanner performs no GitHub/GitLab lookups,
+            no provider API calls, and no clone — it does not try to guess
+            which repository belongs to the site.
+            """
             if not include_repo:
                 return None
-            # An explicitly supplied repo wins: developers testing their own
-            # site usually don't link the repo from the page at all.
             repo_candidate = parse_repo_url(repo_url)
             if repo_candidate is None:
-                repo_candidate = await discover_repository(fetcher, scope, crawl_result)
-            if not repo_candidate:
                 return None
-            await emit({"repo_status": f"Found repo: {repo_candidate.owner}/{repo_candidate.name}, analyzing..."})
+            await emit({"repo_status": f"Analyzing {repo_candidate.owner}/{repo_candidate.name}…"})
             analysis = await analyze_repository(repo_candidate, scope)
             return analysis
 
@@ -269,6 +288,10 @@ async def run_deep_scan(
         result.findings = _dedup_findings(result.findings)
         # Normalise severity and wording against the evidence actually held,
         # before anything scores or summarizes these findings.
+        # Attribute every finding to the origin its evidence came from, before
+        # anything scores it. A response from a third-party service is reported
+        # but never counted against this target.
+        attribute_scope(result.findings, scope)
         apply_policy(result.findings)
         # Per-finding scores are used only for internal ordering, never as the
         # authoritative risk — that comes solely from the AI analyst.
@@ -280,6 +303,20 @@ async def run_deep_scan(
         active_ran = not passive_only and any(
             p.param_type == "query" and p.method == "GET" for p in result.params
         )
+        # --- Security graph: model the attack surface, then score risk from
+        # its structure rather than from a count of findings.
+        in_scope_findings, third_party = split_scope(result.findings)
+        result.third_party_observations = [
+            observation_payload(f) for f in third_party
+        ]
+        graph = build_graph(scope, result)
+        result.graph_summary = graph.summary()
+        # Sentinel Risk Model v1 — deterministic and authoritative. The AI
+        # layer receives this and may explain it, never recalculate it.
+        result.sentinel_risk = calculate_sentinel_risk(in_scope_findings)
+        result.risk_score = result.sentinel_risk["score"]
+        result.final_risk = result.sentinel_risk["severity"].lower()
+
         result.test_results = build_test_results(
             result.findings,
             active_ran=active_ran,
@@ -306,7 +343,9 @@ async def run_deep_scan(
             assessment, reason = await security_analyst.analyze(summary)
             if assessment is not None:
                 result.ai_analyzed = True
-                result.risk_score = assessment.risk_score
+                # The analyst explains; it does not score. The deterministic
+                # engine's number stands.
+                _ = assessment.risk_score
                 result.final_risk = assessment.risk_level
                 result.ai_summary = assessment.summary
                 result.ai_recommendation = assessment.overall_recommendation
@@ -388,32 +427,119 @@ def _upload_findings(uploads) -> list[FindingCandidate]:
 
 
 def _vhost_findings(vhosts) -> list[FindingCandidate]:
-    """Flag virtual hosts that both differ from the baseline AND carry a
-    sensitive label (admin/dev/staging/…) — a possible isolation/exposure
-    problem. Groq assigns the final severity."""
+    """Report development/admin surfaces that were *observed*, nothing more.
+
+    Finding a distinct application at admin.example.com is a real discovery,
+    but it is only that. The scanner has not checked whether authentication is
+    missing, whether admin functions are reachable, whether debug mode is on,
+    or whether any data is exposed — so the finding states what was seen and
+    explicitly lists what was not determined, instead of describing the
+    consequences those unverified conditions would have.
+    """
     out: list[FindingCandidate] = []
     for v in vhosts:
-        label = v.hostname.split(".")[0].lower()
-        if label in _SENSITIVE_VHOST_LABELS:
+        # The scanner already established this is a distinct application; the
+        # only question left is whether we can name the environment.
+        if not getattr(v, "distinct", False):
+            continue
+
+        if not v.environment:
+            # A suggestive hostname with nothing in the response to back it up.
+            # Informational only — we will not name an environment we cannot see.
             out.append(
                 FindingCandidate(
-                    title=f"Virtual host exposes a '{label}' application",
-                    category="configuration",
-                    severity="medium",
-                    confidence="potential",
+                    title=f"Potentially interesting hostname: {v.hostname}",
+                    category="attack_surface",
+                    severity="info",
+                    confidence="confirmed",
                     url=v.hostname,
-                    evidence=f"Host: {v.hostname} returns a different app "
-                    f"(HTTP {v.status_code}, {v.content_length} bytes) than the "
-                    "primary host.",
-                    description="A different virtual application responds to a "
-                    "sensitive Host header value, suggesting weak host "
-                    "isolation or an exposed non-production app.",
-                    impact="",
-                    remediation="",
+                    evidence=(
+                        f"{v.hostname} serves an application distinct from the "
+                        f"primary host and from the catch-all response "
+                        f"(HTTP {v.status_code}, {v.content_length} bytes"
+                        + (f", title: {v.title!r}" if v.title else "")
+                        + ")."
+                    ),
+                    response_summary=f"HTTP {v.status_code}, {v.content_length} bytes",
+                    description=(
+                        "The hostname pattern suggests a non-production or "
+                        "administrative deployment, but nothing in the response "
+                        "confirms that. Reported for awareness only."
+                    ),
+                    impact=(
+                        "Not established. The environment type was inferred from "
+                        "the hostname alone, which is not evidence. No debug "
+                        "markers, environment headers, admin interface, or "
+                        "authentication prompt were observed."
+                    ),
+                    remediation=(
+                        f"Confirm what {v.hostname} serves and whether it is "
+                        "meant to be publicly reachable."
+                    ),
+                    dedup_key=f"vhost|{v.hostname}",
+                )
+            )
+            continue
+
+        label = v.environment
+        out.append(
+                FindingCandidate(
+                    title=f"Exposed {label} surface detected at {v.hostname}",
+                    category="attack_surface",
+                    # An observation about attack surface, not a vulnerability.
+                    severity="low",
+                    # We did observe this — the uncertainty is about its
+                    # significance, not about whether it is real.
+                    confidence="confirmed",
+                    url=v.hostname,
+                    evidence=(
+                        f"Host: {v.hostname} returns HTTP {v.status_code} with a "
+                        f"{v.content_length}-byte body that differs from the "
+                        "primary host, so a separate application is served here."
+                    ),
+                    response_summary=(
+                        f"HTTP {v.status_code}, {v.content_length} bytes, "
+                        "distinct from the primary host"
+                    ),
+                    description=(
+                        f"A separate application responds on {v.hostname}. The "
+                        f"'{label}' label suggests a non-production or "
+                        "administrative deployment reachable from the public "
+                        "internet."
+                    ),
+                    impact=(
+                        "This widens the attack surface: another application is "
+                        "publicly reachable and may not receive the same "
+                        "scrutiny as production. The scanner did NOT determine "
+                        "whether authentication is required, whether "
+                        "administrative functions are reachable, whether debug "
+                        "mode is enabled, or whether any sensitive data is "
+                        "exposed — none of those were tested."
+                    ),
+                    remediation=(
+                        f"Confirm {v.hostname} is meant to be public. If it is "
+                        "not, remove the DNS record or restrict it to a VPN or "
+                        "allow-listed IP ranges. If it is intended to be "
+                        "public, verify it enforces authentication and runs "
+                        "with debug output disabled."
+                    ),
                     dedup_key=f"vhost|{v.hostname}",
                 )
             )
     return out
+
+# Developer-facing education, keyed by SAST vuln class.
+_SAST_LEARNING = {
+    r.vuln_class: {
+        "principle": r.principle,
+        "learning": r.learning,
+        "remediation": r.remediation,
+        "verify": r.verify,
+        "cwe": r.cwe,
+    }
+    for r in _SAST_RULES
+}
+
 
 def _convert_repo_findings(repo_analysis: RepoAnalysisResult) -> list[FindingCandidate]:
     out = []
@@ -447,16 +573,8 @@ def _dependency_finding(df) -> FindingCandidate:
     """
     label = CLASSIFICATION_LABEL.get(df.classification, "Vulnerable Dependency Present")
 
-    # Severity ladder. Only a call reachable from request data earns Medium+,
-    # and the advisory's own severity caps it rather than setting it.
-    if df.classification == POTENTIALLY_EXPLOITABLE:
-        severity = df.severity if df.severity in ("critical", "high", "medium") else "medium"
-    elif df.classification == REACHABLE_FROM_INPUT:
-        severity = "medium"
-    elif df.classification == FUNCTIONALITY_USED:
-        severity = "low"
-    else:
-        severity = "low"
+    # Shared with the source_findings writer so the two views cannot drift.
+    severity = dependency_severity(df.classification, df.severity)
 
     fixed = df.fixed_version or "no fixed version published"
     remediation = (
@@ -540,56 +658,6 @@ def _dependency_finding(df) -> FindingCandidate:
             "classification": df.classification,
         },
     )
-    if not df.is_direct:
-        remediation += (
-            " This is a transitive dependency — update the parent package that "
-            "requires it, or pin an override."
-        )
-
-    evidence_lines = [
-        f"Package: {df.package} {df.version} ({df.ecosystem}, {dependency_kind})",
-        f"Advisory: {df.advisory_id or 'unknown'}",
-        f"Vulnerable range: {df.affected_versions or 'unspecified'}",
-        f"Patched version: {fixed}",
-        f"Imported in analyzed source: {'yes' if df.is_used else 'no'}",
-        f"Externally reachable path: {df.reachability_text}",
-    ]
-    if df.import_sites:
-        evidence_lines.append(f"Import sites: {', '.join(df.import_sites[:3])}")
-
-    return FindingCandidate(
-        title=f"{label}: {df.package} {df.version}",
-        category="dependency_vulnerability",
-        severity=severity,
-        # Static analysis never confirms exploitability.
-        confidence="potential",
-        url="",
-        evidence="\n".join(evidence_lines),
-        response_summary="Software composition analysis (OSV)",
-        description=(
-            f"{df.package} {df.version} is affected by {df.advisory_id or 'a published advisory'}"
-            + (f": {df.advisory_summary}" if df.advisory_summary else ".")
-        ),
-        impact=impact,
-        remediation=remediation,
-        dedup_key=f"repo_dep|{df.package}|{df.advisory_id}",
-        exploitability=df.classification,
-        dependency={
-            "package": df.package,
-            "version": df.version,
-            "ecosystem": df.ecosystem,
-            "advisory_id": df.advisory_id,
-            "vulnerable_range": df.affected_versions,
-            "fixed_version": df.fixed_version,
-            "is_direct": df.is_direct,
-            "is_used": df.is_used,
-            "externally_reachable": df.externally_reachable,
-            "reachability": df.reachability_text,
-            "classification": df.classification,
-            "import_sites": df.import_sites[:5],
-        },
-    )
-
 
 # Canonical catalogue of security tests the scanner performs, in display
 # order. Each entry: (display name, always-runs?).

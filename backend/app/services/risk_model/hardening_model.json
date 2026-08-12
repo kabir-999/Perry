@@ -1,0 +1,81 @@
+{
+  "$comment": [
+    "Sentinel Hardening Model v1 — NOT CVSS.",
+    "Missing security headers and weak configuration are absent mitigations,",
+    "not independently exploitable vulnerabilities, so they are deliberately",
+    "kept out of CVSS. base_impact is a Sentinel-internal 0-100 hardening",
+    "weight, documented here so every value lives in one auditable place",
+    "rather than being scattered through the codebase.",
+    "Rationale for the ordering: HSTS and CSP remove protections against",
+    "whole attack classes; Referrer-Policy leaks metadata only."
+  ],
+  "model": "Sentinel Hardening Model v1",
+  "scale": "0-100 Sentinel hardening weight (not a CVSS score)",
+  "rules": {
+    "missing_csp": {
+      "label": "Missing Content-Security-Policy",
+      "base_impact": 22,
+      "rationale": "Removes script-source restrictions that would contain an injection flaw."
+    },
+    "missing_hsts": {
+      "label": "Missing Strict-Transport-Security",
+      "base_impact": 20,
+      "rationale": "Browsers without a cached HSTS policy may be exposed on first connection."
+    },
+    "missing_x_frame_options": {
+      "label": "Missing X-Frame-Options",
+      "base_impact": 16,
+      "rationale": "Page may be framed by another site (clickjacking surface)."
+    },
+    "missing_x_content_type_options": {
+      "label": "Missing X-Content-Type-Options",
+      "base_impact": 12,
+      "rationale": "Browsers may MIME-sniff responses instead of trusting the declared type."
+    },
+    "missing_referrer_policy": {
+      "label": "Missing Referrer-Policy",
+      "base_impact": 8,
+      "rationale": "Full URLs may leak to third parties via the Referer header."
+    },
+    "weak_cookie_session": {
+      "label": "Session cookie missing security attributes",
+      "base_impact": 26,
+      "rationale": "A session cookie without HttpOnly/Secure is materially weaker."
+    },
+    "weak_cookie_unknown": {
+      "label": "Unknown cookie missing security attributes",
+      "base_impact": 8,
+      "rationale": "Cookie contents undetermined; treated as hardening only."
+    },
+    "directory_listing": {
+      "label": "Directory listing enabled",
+      "base_impact": 18,
+      "rationale": "Exposes file inventory that aids further discovery."
+    },
+    "version_disclosure": {
+      "label": "Software version disclosure",
+      "base_impact": 10,
+      "rationale": "Lets an attacker match the target to known version-specific issues."
+    },
+    "permissive_cors": {
+      "label": "Permissive CORS configuration",
+      "base_impact": 30,
+      "rationale": "Wildcard origin with credentials weakens same-origin protection."
+    },
+    "default": {
+      "label": "Security hardening issue",
+      "base_impact": 10,
+      "rationale": "Generic hardening weakness with no specific rule."
+    }
+  },
+  "exposure": {
+    "$comment": "Bounded, diminishing exposure multiplier applied to breadth.",
+    "tiers": [
+      {"max_urls": 1,  "multiplier": 1.0},
+      {"max_urls": 5,  "multiplier": 1.1},
+      {"max_urls": 20, "multiplier": 1.2},
+      {"max_urls": null, "multiplier": 1.3}
+    ],
+    "cap": 1.3
+  }
+}

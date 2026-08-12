@@ -32,6 +32,28 @@ def _evidence_strength(f) -> str:
     return "observed"
 
 
+def _source_code_section(deep) -> dict:
+    """Distinguish "analysed and found nothing" from "not analysed".
+
+    Reporting "0 code issues" when no repository was ever cloned implies a
+    clean bill of health that was never established.
+    """
+    repo = getattr(deep, "repo_info", None)
+    if not repo or repo.get("status") != "completed":
+        return {
+            "available": False,
+            "reason": (repo or {}).get("error")
+            or "No repository was analyzed for this scan.",
+        }
+    return {
+        "available": True,
+        "files_analyzed": repo.get("files_analyzed", 0),
+        "code_issues": repo.get("source_findings_count", 0),
+        "dependency_issues": repo.get("dependency_findings_count", 0),
+        "repository": f"{repo.get('owner')}/{repo.get('name')}",
+    }
+
+
 def build_scan_summary(scope, fast, deep) -> dict:
     """Assemble the aggregated summary from the scope, fast-scan, and
     deep-scan results."""
@@ -55,6 +77,8 @@ def build_scan_summary(scope, fast, deep) -> dict:
 
     findings = []
     for f in deep.findings:
+        if not getattr(f, "contributes_to_risk", True):
+            continue
         entry = {
             "type": _finding_type(f.category, f.title),
             "title": f.title,
@@ -68,6 +92,9 @@ def build_scan_summary(scope, fast, deep) -> dict:
             "affected_urls": f.affected_urls,
             "sample_urls": f.affected_url_samples[:5],
             "parameter": f.parameter,
+            "scope_status": getattr(f, "scope_status", ""),
+            "origin": getattr(f, "origin", ""),
+            "affected_url_samples": f.affected_url_samples[:5],
             # Summarized evidence only — never full response bodies.
             "evidence": (f.evidence or "")[:600],
             "response_summary": (f.response_summary or "")[:300],
@@ -86,12 +113,31 @@ def build_scan_summary(scope, fast, deep) -> dict:
         "subdomains": [s.hostname for s in deep.subdomains][:20],
     }
 
+    # The strongest severity the deterministic scanner assigned. The analyst is
+    # told not to exceed it, so the per-finding severities shown in the Risk
+    # Factors panel cannot contradict the Findings and Security Tests panels.
+    _rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+    scanner_max = max(
+        (f.severity for f in deep.findings
+         if getattr(f, "contributes_to_risk", True)),
+        key=lambda sev: _rank.get(sev, 0),
+        default="minimal",
+    )
+
     summary = {
         "target": scope.hostname,
+        "scanner_max_severity": scanner_max,
         "statistics": stats,
         "initial_assessment": initial_assessment,
         "discovery": discovery,
         "findings": findings,
+        # Structural risk, so the analyst sees how the score was derived.
+        "graph": getattr(deep, "graph_summary", {}),
+        "graph_risk": getattr(deep, "graph_risk", {}),
+        # Reported separately and explicitly excluded from the target's risk.
+        "third_party_observations": getattr(deep, "third_party_observations", []),
+        # Source analysis is only "0 issues" when it actually ran.
+        "source_code_analysis": _source_code_section(deep),
     }
     
     if hasattr(deep, "repo_info") and deep.repo_info:

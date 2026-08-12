@@ -45,6 +45,40 @@ SECURITY_HEADERS = {
 }
 
 
+def _header_impact(missing: list[str]) -> str:
+    """Describe what each missing header removes — without claiming an attack.
+
+    A missing header is an absent mitigation. Saying "downgrade attack" states
+    something the scanner did not observe, so each header is described in terms
+    of the protection that is not present.
+    """
+    notes = {
+        "Content-Security-Policy":
+            "Without CSP, the browser applies no restriction on where scripts "
+            "may load from, so an injection flaw elsewhere would be less "
+            "contained.",
+        "Strict-Transport-Security":
+            "Without Strict-Transport-Security, browsers that have not "
+            "previously received an HSTS policy may be more exposed to HTTPS "
+            "downgrade or first-connection interception scenarios. No such "
+            "interception was observed.",
+        "X-Frame-Options":
+            "Without X-Frame-Options (or CSP frame-ancestors), the page may be "
+            "framed by another site.",
+        "X-Content-Type-Options":
+            "Without X-Content-Type-Options: nosniff, browsers may guess a "
+            "response's type rather than trusting the declared one.",
+        "Referrer-Policy":
+            "Without Referrer-Policy, full URLs may be sent to third-party "
+            "sites in the Referer header.",
+    }
+    lines = [notes[m] for m in missing if m in notes]
+    return (
+        "These are defence-in-depth headers; their absence is not itself an "
+        "exploitable vulnerability. " + " ".join(lines)
+    )
+
+
 def check_security_headers(result: FetchResult) -> list[FindingCandidate]:
     """One finding per response summarising missing headers. HSTS is only
     expected on HTTPS origins, so it is skipped for http targets."""
@@ -74,10 +108,13 @@ def check_security_headers(result: FetchResult) -> list[FindingCandidate]:
             evidence="Missing: " + ", ".join(missing),
             response_summary=f"HTTP {result.status_code}; headers present: "
             + ", ".join(sorted(result.headers.keys()))[:400],
+            request_summary=(
+                f"final_url={result.url}"
+                + (f"; redirects={len(result.redirects)}" if result.redirects else "")
+            ),
             description="Responses are missing recommended security "
             "response headers.",
-            impact="Increases exposure to XSS, clickjacking, protocol "
-            "downgrade, and MIME-sniffing attacks.",
+            impact=_header_impact(missing),
             remediation="Add the missing headers: " + ", ".join(missing) + ".",
             dedup_key=f"security_headers|{missing_key}",
         )
@@ -141,31 +178,87 @@ def check_insecure_cookies(result: FetchResult) -> list[FindingCandidate]:
         return []
 
     context = _cookie_context(name)
-    # Severity depends on the cookie's role: a session/auth cookie missing
-    # HttpOnly/Secure is materially worse than a tracking cookie.
+    # Severity follows what we actually know about the cookie's role.
+    #
+    # Medium requires evidence that this is a session/authentication cookie,
+    # because that is what makes a missing HttpOnly/Secure attribute
+    # consequential. For a cookie whose purpose we cannot determine we do not
+    # know that anything sensitive is in it, so the finding stays Low and says
+    # so — rather than assuming the worst case and reporting Medium.
     if context == "session":
         severity = "medium" if ("httponly" in missing or "secure" in missing) else "low"
-    elif context == "tracking":
-        severity = "low"
     else:
-        severity = "low" if "httponly" not in missing else "medium"
+        severity = "low"
+
+    if context == "session":
+        title = "Session cookie set without security attributes"
+        description = (
+            "A cookie whose name identifies it as a session or authentication "
+            "cookie was set without one or more of the Secure, HttpOnly, and "
+            "SameSite attributes."
+        )
+        impact = (
+            "Session cookies without HttpOnly can be read by injected "
+            "JavaScript; without Secure they can leak over plaintext; without "
+            "SameSite they are sent on cross-site requests."
+        )
+    elif context == "tracking":
+        title = "Analytics cookie missing security attributes"
+        description = (
+            "A cookie matching a known analytics/tracking vendor was set "
+            "without one or more of the Secure, HttpOnly, and SameSite "
+            "attributes."
+        )
+        impact = (
+            "Tracking cookies do not normally carry credentials, so the "
+            "practical impact is limited to the tracking data itself."
+        )
+    else:
+        title = "Unknown cookie missing security attributes"
+        description = (
+            f"The cookie '{name}' was set without one or more of the Secure, "
+            "HttpOnly, and SameSite attributes. The scanner could not determine "
+            "what this cookie holds."
+        )
+        impact = (
+            "Not established. The contents and purpose of this cookie are "
+            "unknown, so whether the missing attributes matter depends on "
+            "whether it carries anything sensitive. If it holds a session or "
+            "identity token, treat this as Medium; if it holds a "
+            "non-sensitive preference, the missing attributes are hardening "
+            "only."
+        )
+
+    remediation = (
+        "Set Secure, HttpOnly, and SameSite on session cookies."
+        if context == "session"
+        else "Confirm what this cookie stores. If it carries a session or any "
+        "identifying token, set Secure, HttpOnly, and SameSite on it; if it "
+        "only stores a non-sensitive preference, adding Secure and SameSite is "
+        "still good practice."
+    )
 
     return [
         FindingCandidate(
-            title=f"{context.title()} cookie set without security attributes",
+            title=title,
             category="configuration",
             severity=severity,
             confidence="confirmed",
             url=result.url,
             parameter=name[:256],
-            evidence=f"Cookie '{name}' ({context}) missing: {', '.join(missing)}",
+            evidence=(
+                f"Cookie '{name}' missing: {', '.join(missing)}. "
+                f"Role inferred from name: {context}"
+                + (
+                    " (purpose not determined)"
+                    if context == "unknown"
+                    else ""
+                )
+            ),
             response_summary=set_cookie[:200],
-            description=f"A {context} cookie was set without one or more of the "
-            "Secure, HttpOnly, and SameSite attributes.",
-            impact="Session/auth cookies without HttpOnly can be stolen via "
-            "XSS; without Secure they can leak over plaintext; without "
-            "SameSite they enable CSRF.",
-            remediation="Set Secure, HttpOnly, and SameSite on session cookies.",
+            description=description,
+            impact=impact,
+            remediation=remediation,
             dedup_key=f"insecure_cookie|{context}|{','.join(missing)}",
         )
     ]
