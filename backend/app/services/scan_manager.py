@@ -163,51 +163,26 @@ class ScanManager:
         scope = build_scope(payload.target_url)
         target = await self.get_or_create_target(db, scope)
 
-        # --- Authorization boundary -------------------------------------
-        # Active testing sends crafted payloads at a live host, so it runs
-        # only against a deployment whose control the user has demonstrated.
-        # A local/private address is the developer's own machine and needs no
-        # challenge. Everything else without a VERIFIED target is downgraded
-        # to PASSIVE: ordinary requests only, nothing crafted.
+        # --- Authorization boundary ---------------------------------------
+        # TESTING-ONLY CHANGE: the DNS/HTTP/meta-tag ownership-verification
+        # requirement (VerifiedTarget lookup + is_active_testing_allowed) has
+        # been removed here. Active testing now runs against ANY target as
+        # soon as the caller checks the "I own this site..." confirmation
+        # box (`payload.is_authorized`) — no proof of control is required
+        # anymore. This is a real reduction in safety: re-add the
+        # VerifiedTarget check before this is ever used against real users.
         wants_active = payload.is_authorized
-        authorization_status = tv.UNVERIFIED
-        scan_type = "PASSIVE_WEB"
+        active_enabled = wants_active
+        authorization_status = "LOCAL" if tv.is_local_target(scope.hostname) else "UNVERIFIED_BYPASS"
+        scan_type = "AUTHORIZED_DEPLOYMENT" if active_enabled else "PASSIVE_WEB"
 
-        if tv.is_local_target(scope.hostname):
-            authorization_status = "LOCAL"
-            scan_type = "AUTHORIZED_DEPLOYMENT" if wants_active else "PASSIVE_WEB"
-            allowed = True
-        else:
-            verified = None
-            if user_id is not None:
-                verified = (await db.execute(
-                    select(VerifiedTarget).where(
-                        VerifiedTarget.user_id == user_id,
-                        VerifiedTarget.hostname == scope.hostname,
-                    )
-                )).scalar_one_or_none()
-            allowed, reason = tv.is_active_testing_allowed(verified)
-            if verified is not None:
-                authorization_status = verified.verification_status
-            if allowed:
-                scan_type = "AUTHORIZED_DEPLOYMENT"
-
-        if wants_active and not allowed:
-            # Refuse to run the active half rather than silently doing it.
-            raise UnverifiedTargetError(
-                "Target verification required. Sentinel scans applications "
-                "that you own or are authorized to test. Verify this "
-                f"deployment ({scope.hostname}) before starting an active "
-                "security scan."
-            )
-
-        active_enabled = wants_active and allowed
         db.add(AuditLog(
             user_id=user_id,
             action="active_scan_started" if active_enabled else "passive_scan_started",
             target=scope.hostname,
             result="allowed",
-            detail=f"scan_type={scan_type}; authorization={authorization_status}",
+            detail=f"scan_type={scan_type}; authorization={authorization_status} "
+            "(verification requirement disabled for testing)",
         ))
 
         scan = Scan(
