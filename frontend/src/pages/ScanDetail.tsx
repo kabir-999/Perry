@@ -353,8 +353,10 @@ export default function ScanDetail() {
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#e6dcca]">
             <div
               className="h-full rounded-full transition-all duration-500"
-              style={{ background: "linear-gradient(90deg,#0f766e,#0369a1,#c2410c)" }}
-              style={{ width: `${snap.deep_progress}%` }}
+              style={{
+                background: "linear-gradient(90deg,#0f766e,#0369a1,#c2410c)",
+                width: `${snap.deep_progress}%`,
+              }}
             />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -421,6 +423,15 @@ export default function ScanDetail() {
           <p className="mb-1 text-sm text-[#4a4032]">
             {sentinel.explanation ?? ""}
           </p>
+          {sentinel.aggregation && (
+            <p className="mb-2 text-xs text-[#4a4032]">
+              {sentinel.aggregation.base} pts from the strongest finding
+              {sentinel.aggregation.other_findings > 0 &&
+                ` + ${sentinel.aggregation.added_by_others} pts from ${sentinel.aggregation.other_findings} other finding(s)`}
+              {" = "}
+              {sentinel.score} / 100. {sentinel.aggregation.formula}.
+            </p>
+          )}
           <p className="mb-4 text-xs text-[#948972]">
             {sentinel.methodology ?? "Sentinel Risk Model"} ·{" "}
             {sentinel.findings_considered ?? 0} finding(s) considered
@@ -451,13 +462,18 @@ export default function ScanDetail() {
                       Hardening
                     </span>
                   )}
-                  <span className="ml-auto text-xs text-[#6f6552]">
-                    +{c.contribution} contribution
+                  <span className="ml-auto text-xs font-medium text-[#4a4032]">
+                    +{c.applied_points ?? 0} pts
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-[#6f6552]">
                   Confidence {Math.round(c.confidence * 100)}% ·{" "}
                   {c.affected_urls} endpoint(s) · {c.detection_status}
+                  {c.hardening?.means && (
+                    <span className="block text-[#948972]">
+                      {c.hardening.means}
+                    </span>
+                  )}
                   {c.cvss?.vector && (
                     <span className="block break-all font-mono text-[10px] text-[#948972]">
                       {c.cvss.vector}

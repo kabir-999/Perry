@@ -14,6 +14,7 @@ import dns.asyncresolver
 import dns.exception
 
 from app.services.scope import TargetScope
+from app.services.vhost_scanner import _wildcard_dns
 from app.services.wordlists import SUBDOMAIN_WORDLIST
 
 
@@ -31,6 +32,11 @@ async def discover_subdomains(
         return []
     # Sibling labels under a shared platform suffix belong to other tenants.
     if scope.is_shared_host:
+        return []
+    # A wildcard DNS record makes every label "resolve" — the resolution
+    # itself then carries no information about whether any specific
+    # subdomain was intentionally provisioned.
+    if await _wildcard_dns(scope):
         return []
 
     resolver = dns.asyncresolver.Resolver()

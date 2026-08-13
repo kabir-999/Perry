@@ -166,6 +166,8 @@ export interface RiskContributor {
   detection_status: string;
   contribution: number;
   contribution_note: string;
+  /** This finding's share of the final score; these sum to `score`. */
+  applied_points?: number;
   cvss?: {
     version: string;
     vector: string;
@@ -173,7 +175,7 @@ export interface RiskContributor {
     severity: string;
     undetermined_metrics: string[];
   };
-  hardening?: { model: string; rule: string; base_impact: number };
+  hardening?: { model: string; rule: string; base_impact: number; means?: string };
 }
 
 export interface SentinelRisk {
@@ -184,6 +186,14 @@ export interface SentinelRisk {
   findings_considered?: number;
   third_party_excluded?: number;
   contributors?: RiskContributor[];
+  aggregation?: {
+    base: number;
+    base_from: string;
+    added_by_others: number;
+    other_findings: number;
+    formula: string;
+    note: string;
+  };
   explanation?: string;
 }
 

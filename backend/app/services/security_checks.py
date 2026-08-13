@@ -617,11 +617,14 @@ async def check_api_security(
         if checked >= max_endpoints:
             break
         checked += 1
-        res = await fetcher.fetch(url)
+        # Don't follow redirects here: a probe to a protected endpoint that
+        # 3xx's to a login/error page must not have that page's status/body
+        # attributed back to the originally probed path.
+        res = await fetcher.fetch(url, follow_redirects=False)
         if not res.ok:
             continue
 
-        path = urlparse(res.url).path
+        path = urlparse(res.requested_url).path
 
         # Insecure transport for an API.
         if urlparse(res.url).scheme == "http":

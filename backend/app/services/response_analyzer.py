@@ -127,6 +127,12 @@ SOFT_404 = "soft_404"
 SPA_FALLBACK = "spa_fallback"
 SERVER_ERROR = "server_error"
 ERROR = "error"
+# A 401/403 that matches the site's own blanket-block baseline (a WAF or
+# catch-all auth gate that answers *every* path the same way). This is
+# neither "confirmed real" nor "confirmed not found" — the scanner cannot
+# tell whether the resource behind it exists, so callers must not report a
+# finding from it alone.
+INCONCLUSIVE = "inconclusive"
 
 # Verdicts that mean "this path does not represent its own resource".
 _NEGATIVE = (NOT_FOUND, SOFT_404, SPA_FALLBACK, ERROR)
@@ -211,7 +217,18 @@ class NotFoundProfile:
             # "resource exists" hits; callers handle them separately.
             return SERVER_ERROR
         if status in (401, 403):
-            # Protected but present — a fallback never asks for credentials.
+            # Usually protected-but-present — a soft-404 fallback never asks
+            # for credentials. But if this exact response also came back for
+            # one of the random, guaranteed-absent baseline probes, it's a
+            # blanket block (WAF/catch-all auth gate) rather than a signal
+            # specific to this path, and must not be reported as a hit.
+            if analyzed.fingerprint in self.fingerprints:
+                return INCONCLUSIVE
+            for sample in self.samples:
+                if sample.status_code == status and _similar(
+                    sample, analyzed, self.similarity_threshold
+                ):
+                    return INCONCLUSIVE
             return REAL
         if not (200 <= status < 400):
             return NOT_FOUND

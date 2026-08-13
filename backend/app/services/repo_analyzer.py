@@ -220,18 +220,54 @@ def _prioritize_files(files: list[Path]) -> list[Path]:
     return sorted(files, key=_score)
 
 
+def _git_tracking_status(repo_path: Path, rel_path: str) -> str:
+    """Is this file tracked by git, or gitignored-and-untracked?
+
+    A secret in a committed file is exposed to everyone who clones the repo.
+    A secret in a file that is deliberately gitignored and never staged
+    (the standard `.env` pattern) is a local-hygiene concern, not an
+    exposure — the two must not be reported with the same severity.
+
+    Returns "tracked" | "ignored_untracked" | "unknown". "unknown" covers
+    every case where this can't be determined (no `.git`, no git binary,
+    any subprocess error) and callers must treat it as a no-op — never
+    downgrade a finding on a signal we couldn't actually confirm.
+    """
+    if not (repo_path / ".git").exists():
+        return "unknown"
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(repo_path), "ls-files", "--error-unmatch", "--", rel_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if tracked.returncode == 0:
+            return "tracked"
+        ignored = subprocess.run(
+            ["git", "-C", str(repo_path), "check-ignore", "-q", "--", rel_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if ignored.returncode == 0:
+            return "ignored_untracked"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _scan_secrets(repo_path: Path, files: list[Path]) -> list[SourceFinding]:
     """Scan files for hardcoded secrets and env files."""
     findings = []
-    
+
     for file_path in files:
         rel_path = str(file_path.relative_to(repo_path))
-        
+
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-            
+
+        tracking = _git_tracking_status(repo_path, rel_path)
+        local_only = tracking == "ignored_untracked"
+
         # Specialized env file parsing
         if rel_path.endswith(".env") or ".env." in rel_path:
             is_example = "example" in rel_path.lower()
@@ -252,27 +288,47 @@ def _scan_secrets(repo_path: Path, files: list[Path]) -> list[SourceFinding]:
                         or val_lower == "example"
                         or val_lower == "test"
                     )
-                    
+
                     if not is_placeholder and (SECRET_KEY_PATTERNS.search(key) or _looks_like_secret(val)):
                         # Only flag .env.example if it has real-looking secrets (entropy/patterns)
                         if is_example and not _looks_like_secret(val):
                             continue
-                            
+
+                        context = f"{key}=[REDACTED]"
+                        severity = "critical"
+                        # A secret is a direct textual match, not an inferred
+                        # pattern, so confidence is "confirmed" by default —
+                        # one of the four states the risk model actually
+                        # recognises (confirmed/potential/uncertain/
+                        # false_positive); "high" was never valid and was
+                        # silently scored as a mid-confidence default. But a
+                        # file that is gitignored and was never staged has
+                        # not been exposed to anyone who clones the repo —
+                        # it's a local-hygiene note, not a vulnerability, so
+                        # it is reported informationally (zero risk-score
+                        # contribution) rather than capped-but-still-scored.
+                        confidence = "confirmed"
+                        if local_only:
+                            severity = "info"
+                            confidence = "uncertain"
+                            context += " (gitignored, not committed to version control)"
+
                         findings.append(
                             SourceFinding(
                                 finding_type="env_secret",
                                 file=rel_path,
                                 line=i+1,
-                                severity="critical",
-                                confidence="high",
+                                severity=severity,
+                                confidence=confidence,
                                 evidence=f"{key}=[REDACTED]",
                                 secret_type=key,
                                 redacted_value="[REDACTED]",
-                                code_context=f"{key}=[REDACTED]"
+                                code_context=context,
+                                local_only=local_only,
                             )
                         )
             continue
-            
+
         # General secret scanning for code files
         # Look for pattern: KEY = "VALUE" or "KEY": "VALUE"
         lines = content.splitlines()
@@ -283,7 +339,7 @@ def _scan_secrets(repo_path: Path, files: list[Path]) -> list[SourceFinding]:
             if match:
                 key_context = line[:match.start(2)].strip()
                 val = match.group(2)
-                
+
                 val_lower = val.lower()
                 is_placeholder = (
                     not val
@@ -291,23 +347,32 @@ def _scan_secrets(repo_path: Path, files: list[Path]) -> list[SourceFinding]:
                     or "changeme" in val_lower
                     or val_lower == "example"
                 )
-                
+
                 if not is_placeholder and _looks_like_secret(val):
                     redacted_line = line.replace(val, "[REDACTED]")
+                    context = redacted_line.strip()
+                    severity = "critical"
+                    confidence = "confirmed"
+                    if local_only:
+                        severity = "info"
+                        confidence = "uncertain"
+                        context += " (gitignored, not committed to version control)"
+
                     findings.append(
                         SourceFinding(
                             finding_type="hardcoded_secret",
                             file=rel_path,
                             line=i+1,
-                            severity="critical",
-                            confidence="high",
+                            severity=severity,
+                            confidence=confidence,
                             evidence=redacted_line.strip(),
                             secret_type="Hardcoded Secret",
                             redacted_value="[REDACTED]",
-                            code_context=redacted_line.strip()
+                            code_context=context,
+                            local_only=local_only,
                         )
                     )
-                    
+
     return findings
 
 
@@ -382,12 +447,19 @@ async def _scan_dependencies(
             pkg = json.loads(pkg_json_path.read_text(encoding="utf-8"))
             deps = pkg.get("dependencies", {})
             dev_deps = pkg.get("devDependencies", {})
-            all_deps = {**deps, **dev_deps}
+            # Query each section separately rather than merging into one
+            # dict — a name pinned to different versions in `dependencies`
+            # and `devDependencies` would otherwise silently lose one
+            # version to the dict-spread overwrite.
             findings.extend(
-                await _query_osv("npm", all_deps, repo_path, files, declared)
+                await _query_osv("npm", deps, repo_path, files, declared)
             )
-        except Exception:
-            pass
+            dev_only = {k: v for k, v in dev_deps.items() if k not in deps}
+            findings.extend(
+                await _query_osv("npm", dev_only, repo_path, files, declared)
+            )
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", pkg_json_path, exc)
 
     # Check requirements.txt
     req_txt_path = repo_path / "requirements.txt"
@@ -405,8 +477,8 @@ async def _scan_dependencies(
             findings.extend(
                 await _query_osv("PyPI", deps, repo_path, files, declared)
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", req_txt_path, exc)
 
     return findings
 
@@ -435,6 +507,10 @@ async def _query_osv(
             # Clean up version string (remove ^, ~, etc.)
             clean_version = re.sub(r'^[^\d]+', '', version)
             if not clean_version:
+                logger.info(
+                    "Skipping %s: declared version %r has no parseable number",
+                    package, version,
+                )
                 continue
 
             payload = {

@@ -174,59 +174,79 @@ class Fetcher:
             request_kwargs["json"] = json
         if data is not None:
             request_kwargs["data"] = data
-        async with self._sem:
-            try:
-                async with self._client.stream(
-                    method, url, **request_kwargs
-                ) as response:
-                    chunks: list[bytes] = []
-                    total = 0
-                    truncated = False
-                    async for chunk in response.aiter_bytes():
-                        chunks.append(chunk)
-                        total += len(chunk)
-                        if total >= self._max_bytes:
-                            truncated = True
-                            break
-                    raw = b"".join(chunks)[: self._max_bytes]
-                    encoding = response.charset_encoding or "utf-8"
-                    try:
-                        text = raw.decode(encoding, errors="replace")
-                    except (LookupError, TypeError):
-                        text = raw.decode("utf-8", errors="replace")
 
-                    redirects = [
-                        (r.status_code, r.headers.get("location", ""))
-                        for r in response.history
-                    ]
-                    headers = {k.lower(): v for k, v in response.headers.items()}
-                    return FetchResult(
-                        url=str(response.url),
-                        requested_url=url,
-                        method=method.upper(),
-                        status_code=response.status_code,
-                        headers=headers,
-                        content_type=headers.get("content-type", ""),
-                        text=text,
-                        body_bytes=total,
-                        truncated=truncated,
-                        elapsed_ms=(time.perf_counter() - started) * 1000,
-                        redirects=redirects,
-                    )
-            except httpx.ConnectError:
-                error = "connection_refused"
-            except httpx.ConnectTimeout:
-                error = "connect_timeout"
-            except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
-                error = "timeout"
-            except httpx.TooManyRedirects:
-                error = "too_many_redirects"
-            except httpx.InvalidURL:
-                error = "invalid_url"
-            except httpx.HTTPError as exc:
-                error = f"http_error:{type(exc).__name__}"
-            except Exception as exc:  # pragma: no cover - defensive
-                error = f"unexpected:{type(exc).__name__}"
+        # A single dropped packet must not read as "this path is safe" —
+        # one bounded retry distinguishes a transient blip from a real
+        # connectivity/timeout problem before we give up on this request.
+        _TRANSIENT_RETRIES = 1
+        _RETRY_BACKOFF_SECONDS = 0.3
+
+        async with self._sem:
+            for attempt in range(_TRANSIENT_RETRIES + 1):
+                try:
+                    async with self._client.stream(
+                        method, url, **request_kwargs
+                    ) as response:
+                        chunks: list[bytes] = []
+                        total = 0
+                        truncated = False
+                        async for chunk in response.aiter_bytes():
+                            chunks.append(chunk)
+                            total += len(chunk)
+                            if total >= self._max_bytes:
+                                truncated = True
+                                break
+                        raw = b"".join(chunks)[: self._max_bytes]
+                        encoding = response.charset_encoding or "utf-8"
+                        try:
+                            text = raw.decode(encoding, errors="replace")
+                        except (LookupError, TypeError):
+                            text = raw.decode("utf-8", errors="replace")
+
+                        redirects = [
+                            (r.status_code, r.headers.get("location", ""))
+                            for r in response.history
+                        ]
+                        headers = {k.lower(): v for k, v in response.headers.items()}
+                        return FetchResult(
+                            url=str(response.url),
+                            requested_url=url,
+                            method=method.upper(),
+                            status_code=response.status_code,
+                            headers=headers,
+                            content_type=headers.get("content-type", ""),
+                            text=text,
+                            body_bytes=total,
+                            truncated=truncated,
+                            elapsed_ms=(time.perf_counter() - started) * 1000,
+                            redirects=redirects,
+                        )
+                except httpx.ConnectError:
+                    error = "connection_refused"
+                    transient = True
+                except httpx.ConnectTimeout:
+                    error = "connect_timeout"
+                    transient = True
+                except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
+                    error = "timeout"
+                    transient = True
+                except httpx.TooManyRedirects:
+                    error = "too_many_redirects"
+                    transient = False
+                except httpx.InvalidURL:
+                    error = "invalid_url"
+                    transient = False
+                except httpx.HTTPError as exc:
+                    error = f"http_error:{type(exc).__name__}"
+                    transient = False
+                except Exception as exc:  # pragma: no cover - defensive
+                    error = f"unexpected:{type(exc).__name__}"
+                    transient = False
+
+                if transient and attempt < _TRANSIENT_RETRIES:
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                break
 
             return FetchResult(
                 url=url,

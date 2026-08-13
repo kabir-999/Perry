@@ -26,7 +26,11 @@ async def discover_directories(
     file_urls = [f"{origin}/{path}" for path in SENSITIVE_FILES]
 
     dir_results = await fetcher.fetch_many(dir_urls)
-    file_results = await fetcher.fetch_many(file_urls)
+    # Sensitive-file hits are only ever accepted at status 200 below, so a
+    # redirect (e.g. /.env -> a login page) can never itself qualify —
+    # not following it avoids treating the redirect target's content as if
+    # it were the sensitive file's own content.
+    file_results = await fetcher.fetch_many(file_urls, follow_redirects=False)
 
     discovered: list[DiscoveredPath] = []
     findings: list[FindingCandidate] = []
@@ -39,7 +43,10 @@ async def discover_directories(
             continue
         discovered.append(
             DiscoveredPath(
-                url=res.url,
+                # The path actually probed, not wherever a redirect landed —
+                # `res.url` would misattribute a discovery to a login/error
+                # page the request happened to be redirected to.
+                url=res.requested_url,
                 status_code=res.status_code,
                 content_type=res.content_type,
                 response_size=res.body_bytes,

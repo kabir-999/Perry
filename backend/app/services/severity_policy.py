@@ -82,6 +82,16 @@ _DEPENDENCY_CONFIDENCE = {
 }
 
 
+# Categories where the title/severity amounts to an attack claim that only
+# a live, observed request/response pair can back up — a static pattern
+# match is a hypothesis, not a demonstration. Secrets are deliberately
+# excluded: a match in `information_exposure` *is* the evidence (the text is
+# literally there), there is no "attack" to demonstrate, so requiring a
+# request/response pair here would cap every secret finding regardless of
+# how certain the match is.
+_ATTACK_CLAIM_CATEGORIES = ("code_security", "dependency_vulnerability", "input_validation", "authentication")
+
+
 # Which finding category a given header actually mitigates. Only a
 # demonstrated finding in that category can raise the header above Low.
 _HEADER_MITIGATES = {
@@ -158,8 +168,17 @@ def apply_policy(findings: list[FindingCandidate]) -> None:
             f.title = _soften(f.title)
             f.description = _soften(f.description)
             f.impact = _soften(f.impact)
-            # A pattern match must not present as a proven exploit.
-            if f.category in ("code_security", "dependency_vulnerability"):
+            # A pattern match must not present as a proven exploit. This
+            # covers every category that makes an *attack* claim — a
+            # reflected-XSS or path-traversal probe that only matched a
+            # suggestive pattern (confidence=potential, no observed
+            # request/response pair) is exactly as unproven as a static
+            # code match. Categories like information_exposure are excluded
+            # deliberately: a matched secret is its own evidence and has no
+            # request/response pair to demonstrate by definition, so this
+            # cap would otherwise flatten every secret finding to Medium
+            # regardless of how certain the match actually is.
+            if f.category in _ATTACK_CLAIM_CATEGORIES:
                 f.severity = _cap(f.severity, "medium" if f.severity != "low" else "low")
 
 

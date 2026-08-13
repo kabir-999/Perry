@@ -22,10 +22,13 @@ finished number and may explain it, never change it.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from cvss import CVSS4
+
+logger = logging.getLogger("scanner.risk_model")
 
 # --------------------------------------------------------- classification
 
@@ -284,13 +287,28 @@ _CONFIDENCE = {
 }
 
 
+# Categories where the scanner sends a crafted payload and can therefore
+# *demonstrate* an attack. Observing that a response lacks a header is a
+# confirmed observation, not a demonstrated exploit — nothing was attacked.
+_DEMONSTRABLE_CATEGORIES = {
+    "input_validation",   # XSS / SQLi / traversal / command injection probes
+    "authentication",
+    "source_correlation",
+}
+
+
 def detection_status(finding) -> str:
-    """DETECTED / VALIDATED / EXPLOIT_DEMONSTRATED from the evidence held."""
+    """DETECTED / VALIDATED / EXPLOIT_DEMONSTRATED from the evidence held.
+
+    EXPLOIT_DEMONSTRATED requires that an attack was actually performed and
+    its effect observed. A missing security header is fully confirmed but
+    nothing was exploited, so it tops out at VALIDATED.
+    """
     demonstrated = bool(
         finding.confidence == "confirmed"
         and finding.evidence
         and (finding.request_summary or finding.response_summary)
-        and finding.category not in ("dependency_vulnerability", "code_security")
+        and finding.category in _DEMONSTRABLE_CATEGORIES
     )
     if demonstrated:
         return EXPLOIT_DEMONSTRATED
@@ -319,7 +337,17 @@ def classify(finding) -> str:
 
 
 def confidence_of(finding) -> float:
-    return _CONFIDENCE.get(finding.confidence, 0.5)
+    value = getattr(finding, "confidence", None)
+    if value in _CONFIDENCE:
+        return _CONFIDENCE[value]
+    # A missing or malformed confidence string must never score higher than
+    # a legitimately "uncertain" finding — defaulting to the midpoint would
+    # silently reward a bug in whatever engine produced this finding.
+    logger.warning(
+        "Finding %r has unrecognised confidence %r; treating as 'uncertain'",
+        getattr(finding, "title", "<untitled>"), value,
+    )
+    return _CONFIDENCE["uncertain"]
 
 
 # ---------------------------------------------------------- deduplication
@@ -414,6 +442,10 @@ def calculate_sentinel_risk(findings: list) -> dict:
                 "rule": rule_id,
                 "base_impact": impact,
                 "scale": HARDENING_MODEL["scale"],
+                "means": (
+                    "A protective control is absent. No attack was performed "
+                    "or observed against this finding."
+                ),
             }
             raw = impact
         else:
@@ -443,11 +475,27 @@ def calculate_sentinel_risk(findings: list) -> dict:
 
     # Remaining findings add a bounded share of the distance to 100, with
     # diminishing weight, so volume can raise the score but never dominate it.
-    tail = sum(
-        c["contribution"] / (i + 2) for i, c in enumerate(contributors[1:])
-    )
+    weights = [c["contribution"] / (i + 2) for i, c in enumerate(contributors[1:])]
+    tail = sum(weights)
     tail_ratio = min(1.0, tail / 100.0)
-    score = int(round(min(100.0, top + (100.0 - top) * 0.35 * tail_ratio)))
+    headroom = (100.0 - top) * 0.35 * tail_ratio
+    score = int(round(min(100.0, top + headroom)))
+
+    # Attribute the score back to the findings so the listed numbers add up to
+    # the printed total. Without this the user sees contributions that cannot
+    # be reconciled with the score.
+    contributors[0]["applied_points"] = round(top, 1)
+    for c, w in zip(contributors[1:], weights):
+        share = (w / tail) if tail else 0.0
+        c["applied_points"] = round(headroom * share, 1)
+    for c in contributors[len(weights) + 1:]:
+        c["applied_points"] = 0.0
+    # Absorb rounding drift into the largest contributor so the column sums
+    # exactly to the score.
+    drift = score - round(sum(c["applied_points"] for c in contributors), 1)
+    contributors[0]["applied_points"] = round(
+        contributors[0]["applied_points"] + drift, 1
+    )
 
     return {
         "score": score,
@@ -456,12 +504,25 @@ def calculate_sentinel_risk(findings: list) -> dict:
         "findings_considered": len(contributors),
         "third_party_excluded": third_party,
         "contributors": contributors[:20],
+        # How the score was assembled, in the same units the user is shown.
+        "aggregation": {
+            "base": round(top, 1),
+            "base_from": contributors[0]["title"],
+            "added_by_others": round(headroom, 1),
+            "other_findings": max(0, len(contributors) - 1),
+            "formula": (
+                "score = strongest finding + a capped share of the remaining "
+                "headroom (35% max), so one severe finding dominates and "
+                "volume alone cannot inflate the total"
+            ),
+            "note": "applied_points across contributors sum to the score.",
+        },
         "explanation": (
-            f"Driven primarily by '{contributors[0]['title']}' "
-            f"({contributors[0]['contribution']}/100 contribution)"
+            f"{round(top, 1)} of {score} comes from "
+            f"'{contributors[0]['title']}'"
             + (
-                f", with {len(contributors) - 1} further finding(s) adding "
-                "a bounded amount."
+                f"; the other {len(contributors) - 1} finding(s) add "
+                f"{round(headroom, 1)}."
                 if len(contributors) > 1
                 else "."
             )
