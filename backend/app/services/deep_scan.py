@@ -33,7 +33,14 @@ from app.services.parameter_discovery import consolidate_parameters
 from app.services.response_analyzer import analyze, learn_not_found_profile
 from app.services.risk_engine import score_all
 from app.services.security_graph import build_graph
-from app.services.risk_model import calculate_sentinel_risk
+from app.services.risk_model import (
+    calculate_sentinel_risk,
+    classify as _risk_classify,
+    detection_status as _detection_status,
+    hardening_impact as _hardening_impact,
+    score_cvss as _score_cvss,
+    _vuln_class,
+)
 from app.services.scope_policy import (
     attribute as attribute_scope,
     observation_payload,
@@ -78,6 +85,9 @@ class DeepScanResult:
     vhosts: list = field(default_factory=list)
     findings: list[FindingCandidate] = field(default_factory=list)
     test_results: list[dict] = field(default_factory=list)
+    # Every active payload actually sent (success or negative), so a passed
+    # test still leaves a record of what was tried. Feeds each test's log.
+    active_probe_log: list[dict] = field(default_factory=list)
     requests_made: int = 0
     repo_info: dict | None = None
     # Security graph + graph-derived risk (deterministic; the AI analyst
@@ -174,7 +184,11 @@ async def run_deep_scan(
         # active parameter probes (use crawl params) all run together so their
         # network waits overlap.
         crawl_params = consolidate_parameters(crawl_result.params)
-        
+
+        # One recorder for the whole active pass (crawl params now, API params
+        # later): logs every payload sent and its verdict, hit or miss.
+        probe_recorder = active_engine.ProbeRecorder()
+
         async def repo_pipeline():
             """Analyze source only when the user supplied a repository.
 
@@ -200,7 +214,7 @@ async def run_deep_scan(
                 extra_hosts=[s.hostname for s in subdomains],
                 not_found=not_found,
             ),
-            _run_active(fetcher, crawl_params, passive_only),
+            _run_active(fetcher, crawl_params, passive_only, recorder=probe_recorder),
             repo_pipeline(),
             analyze_bundles(fetcher, scope, crawl_result.script_urls, not_found),
         )
@@ -237,8 +251,14 @@ async def run_deep_scan(
         # analysis, and shared request budget as every other active test.
         if api_params:
             result.findings.extend(
-                await _run_active(fetcher, consolidate_parameters(api_params), passive_only)
+                await _run_active(
+                    fetcher, consolidate_parameters(api_params), passive_only,
+                    recorder=probe_recorder,
+                )
             )
+
+        # Every payload the active engine sent, whatever the outcome.
+        result.active_probe_log = probe_recorder.entries
 
         if custom_test_cases and not passive_only:
             result.findings.extend(
@@ -366,6 +386,9 @@ async def run_deep_scan(
             passive_only=passive_only,
             authz_status=authz_status,
         )
+        # Attach the per-test structured log (findings + every probe attempt),
+        # so each test row can be expanded to its JSON in the UI.
+        attach_test_logs(result.test_results, result.findings, result.active_probe_log)
 
         await emit(
             {
@@ -818,12 +841,12 @@ def _classify_finding(f: FindingCandidate) -> str:
     return "Other"
 
 
-async def _run_active(fetcher, crawl_params, passive_only: bool):
+async def _run_active(fetcher, crawl_params, passive_only: bool, recorder=None):
     """Active injection probes send crafted payloads, so they run only for a
     user who has confirmed authorization for the target."""
     if passive_only:
         return []
-    return await active_engine.run_active_tests(fetcher, crawl_params)
+    return await active_engine.run_active_tests(fetcher, crawl_params, recorder=recorder)
 
 
 def build_test_results(
@@ -910,6 +933,110 @@ def build_test_results(
                  "detail": "No issues detected."}
             )
     return results
+
+
+# Whether each catalogue test is a passive observation, an active injection
+# probe, or an API check — annotates the log so a reader knows what "pass"
+# means (no attack sent vs attack sent and failed).
+_TEST_TYPE = {
+    name: ("active" if runs == "active" else "api" if runs == "api" else "passive")
+    for name, runs in _TEST_CATALOG
+}
+
+# Active-probe dedup prefixes -> the catalogue test they belong to, so probe
+# entries can be attached to the right test's log.
+_PROBE_TO_TEST = {
+    "reflected_xss": "Reflected XSS",
+    "sqli": "SQL Injection",
+    "path_traversal": "Path Traversal",
+    "cmd_injection": "Command Injection",
+    "open_redirect": "Open Redirect",
+    "hpp": "HTTP Parameter Pollution",
+}
+
+# Human status shown inside the log, derived from the row status + test type.
+_LOG_STATUS = {
+    "pass": {"passive": "PASS", "active": "NOT_VULNERABLE", "api": "PASS"},
+    "finding": {"passive": "FINDING", "active": "VULNERABLE", "api": "FINDING"},
+    "not_applicable": {"passive": "NOT_APPLICABLE", "active": "NOT_APPLICABLE", "api": "NOT_APPLICABLE"},
+    "not_authorized": {"passive": "NOT_AUTHORIZED", "active": "NOT_AUTHORIZED", "api": "NOT_AUTHORIZED"},
+    "inconclusive": {"passive": "INCONCLUSIVE", "active": "INCONCLUSIVE", "api": "INCONCLUSIVE"},
+}
+
+
+def _finding_log(f: FindingCandidate) -> dict:
+    """One finding rendered for the log, including its risk-model detail
+    (CVSS for real vulnerabilities, Hardening Model weight for config)."""
+    entry: dict = {
+        "title": f.title,
+        "category": f.category,
+        "severity": f.severity,
+        "confidence": f.confidence,
+        "classification": _risk_classify(f),
+        "detection_status": _detection_status(f),
+        "url": f.url,
+        "method": f.method,
+        "parameter": f.parameter,
+        "evidence": (f.evidence or "")[:400],
+        "request_summary": f.request_summary,
+        "response_summary": f.response_summary,
+        "affected_urls": getattr(f, "affected_urls", 1),
+        "remediation": f.remediation,
+        "dedup_key": f.dedup_key,
+    }
+    vuln_class = _vuln_class(f)
+    if vuln_class is not None:
+        cvss = _score_cvss(vuln_class)
+        entry["cvss"] = cvss.as_dict() if cvss is not None else None
+    elif f.category in ("security_headers", "configuration", "information_exposure"):
+        rule_id, impact = _hardening_impact(f)
+        entry["hardening"] = {
+            "model": "Sentinel Hardening Model v1",
+            "rule": rule_id,
+            "base_impact": impact,
+            "scale": "0-100 hardening weight (not a CVSS score)",
+        }
+    return entry
+
+
+def attach_test_logs(
+    test_results: list[dict],
+    findings: list[FindingCandidate],
+    probe_log: list[dict],
+) -> None:
+    """Attach a structured ``log`` object to each test row, in place.
+
+    Records the outcome of every test whatever the result: the findings it
+    produced (if any) and — for active tests — every payload that was actually
+    sent and its verdict, so a passed test still shows what was tried.
+    """
+    findings_by_test: dict[str, list[FindingCandidate]] = {}
+    for f in findings:
+        findings_by_test.setdefault(_classify_finding(f), []).append(f)
+
+    probes_by_test: dict[str, list[dict]] = {}
+    for p in probe_log:
+        test_name = _PROBE_TO_TEST.get(p.get("test", ""))
+        if test_name:
+            probes_by_test.setdefault(test_name, []).append(p)
+
+    for i, row in enumerate(test_results, start=1):
+        name = row["name"]
+        ttype = _TEST_TYPE.get(name, "passive")
+        test_findings = findings_by_test.get(name, [])
+        test_probes = probes_by_test.get(name, [])
+        row["log"] = {
+            "test_id": f"t_{i:02d}",
+            "name": name,
+            "test_type": ttype,
+            "status": _LOG_STATUS.get(row["status"], {}).get(ttype, row["status"].upper()),
+            "severity": row.get("severity", ""),
+            "finding_count": row.get("count", 0),
+            "probe_requests": len(test_probes),
+            "detail": row.get("detail", ""),
+            "findings": [_finding_log(f) for f in test_findings],
+            "probe_log": test_probes,
+        }
 
 
 def _dedup_findings(findings: list[FindingCandidate]) -> list[FindingCandidate]:
