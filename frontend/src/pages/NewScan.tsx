@@ -52,7 +52,8 @@ export default function NewScan() {
   const [needsVerification, setNeedsVerification] = useState(false);
   const [challenge, setChallenge] = useState<VerificationChallenge | null>(null);
   const [targetId, setTargetId] = useState<string | null>(null);
-  const [method, setMethod] = useState<"dns" | "http">("dns");
+  // Meta tag first: it is the least friction on managed hosts.
+  const [method, setMethod] = useState<"dns" | "http" | "meta">("meta");
   const [verifying, setVerifying] = useState(false);
   const [verifyNote, setVerifyNote] = useState<string | null>(null);
 
@@ -183,7 +184,7 @@ export default function NewScan() {
             </p>
 
             <div className="mt-3 flex gap-2">
-              {(["dns", "http"] as const).map((m) => (
+              {(["meta", "http", "dns"] as const).map((m) => (
                 <button
                   key={m}
                   type="button"
@@ -197,7 +198,11 @@ export default function NewScan() {
                       : "border border-[#e8d09a] text-[#6f6552]"
                   }`}
                 >
-                  {m === "dns" ? "DNS record" : "HTTP file"}
+                  {m === "meta"
+                    ? "Meta tag"
+                    : m === "http"
+                      ? "HTTP file"
+                      : "DNS record"}
                 </button>
               ))}
               <button
@@ -227,9 +232,11 @@ export default function NewScan() {
                 <p className="text-xs text-[#4a4032]">{challenge.instruction}</p>
                 <pre className="mt-2 overflow-x-auto rounded-md border border-[#d9cdb6] bg-[#26221b] px-3 py-2 text-xs text-[#f0e9dc]">
                   <code>
-                    {challenge.method === "dns"
-                      ? `${challenge.record_name}  ${challenge.record_type}\n${challenge.record_value}`
-                      : `${challenge.file_path}\n${challenge.file_content}`}
+                    {challenge.method === "meta"
+                      ? challenge.tag
+                      : challenge.method === "dns"
+                        ? `${challenge.record_name}  ${challenge.record_type}\n${challenge.record_value}`
+                        : `${challenge.file_path}\n${challenge.file_content}`}
                   </code>
                 </pre>
                 <button

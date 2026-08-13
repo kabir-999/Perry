@@ -69,6 +69,8 @@ export const authApi = {
 
 export interface VerificationChallenge {
   method: string;
+  tag?: string;
+  location?: string;
   record_name?: string;
   record_type?: string;
   record_value?: string;
@@ -88,7 +90,7 @@ export interface TargetRead {
 }
 
 export const targetsApi = {
-  add: (url: string, method: "dns" | "http") =>
+  add: (url: string, method: "dns" | "http" | "meta") =>
     client
       .post<{ target: TargetRead; verification: VerificationChallenge }>(
         "/targets",

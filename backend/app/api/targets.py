@@ -19,7 +19,7 @@ router = APIRouter(prefix="/targets", tags=["targets"])
 
 class TargetCreate(BaseModel):
     url: str = Field(..., min_length=1, max_length=2048)
-    method: str = Field(default="dns", pattern="^(dns|http)$")
+    method: str = Field(default="dns", pattern="^(dns|http|meta)$")
 
 
 class TargetRead(BaseModel):
@@ -65,8 +65,12 @@ async def add_target(payload: TargetCreate, db: AsyncSession = Depends(get_db),
     await db.commit()
     await db.refresh(target)
 
-    instructions = (tv.dns_instructions if payload.method == "dns"
-                    else tv.http_instructions)(target.hostname, target.verification_token)
+    builder = {
+        "dns": tv.dns_instructions,
+        "http": tv.http_instructions,
+        "meta": tv.meta_instructions,
+    }[payload.method]
+    instructions = builder(target.hostname, target.verification_token)
     return {"target": TargetRead.model_validate(target, from_attributes=True).model_dump(mode="json"),
             "verification": instructions}
 

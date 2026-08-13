@@ -3,12 +3,16 @@ Deployment ownership verification.
 
 Active testing sends crafted payloads at a live host. Doing that to a target
 the requester does not administer is unauthorized testing, so Sentinel proves
-technical control first, by one of two standard challenges:
+technical control first, by one of three standard challenges:
 
   DNS   a TXT record at ``_sentinel.<host>`` containing the token
   HTTP  a file at ``/.well-known/sentinel-verification.txt`` containing it
+  META  a ``<meta name="sentinel-verification">`` tag on the homepage
 
-Both require write access to something only an administrator controls. Neither
+Each requires write access to something only an administrator controls. Which
+one is easiest depends on the host: a ``*.vercel.app`` subdomain has no DNS the
+developer can edit, and some bundlers skip dot-directories when copying static
+assets, so the meta tag is often the least friction. Neither
 proves *legal* ownership — no scanner can — and the wording says so.
 
 Until a target is VERIFIED, scans of it run in PASSIVE mode: ordinary requests
@@ -28,6 +32,7 @@ import httpx
 VERIFICATION_TTL_DAYS = 90
 
 DNS_PREFIX = "_sentinel"
+META_NAME = "sentinel-verification"
 HTTP_PATH = "/.well-known/sentinel-verification.txt"
 TOKEN_FIELD = "sentinel-verification"
 
@@ -77,6 +82,18 @@ def dns_instructions(hostname: str, token: str) -> dict:
             f"Create a TXT record at {DNS_PREFIX}.{hostname} with the value "
             f"{TOKEN_FIELD}={token}, then press Verify. DNS changes can take a "
             "few minutes to propagate."
+        ),
+    }
+
+
+def meta_instructions(hostname: str, token: str) -> dict:
+    return {
+        "method": "meta",
+        "tag": f'<meta name="{META_NAME}" content="{token}">',
+        "location": f"the <head> of https://{hostname}/",
+        "instruction": (
+            f"Add this tag to the <head> of your homepage (index.html), deploy, "
+            "then press Verify. One line, no new files or directories."
         ),
     }
 
@@ -139,6 +156,47 @@ async def verify_http(hostname: str, token: str) -> VerificationResult:
     return VerificationResult(False, "http", last)
 
 
+_META_RE_TEMPLATE = (
+    r"""<meta[^>]+name\s*=\s*["']?{name}["']?[^>]*content\s*=\s*["']([^"']+)["']"""
+    r"""|<meta[^>]+content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']?{name}["']?"""
+)
+
+
+async def verify_meta(hostname: str, token: str) -> VerificationResult:
+    """Look for the token in a <meta> tag on the homepage.
+
+    Attribute order varies between frameworks and minifiers, so both orderings
+    are accepted.
+    """
+    import re
+
+    pattern = re.compile(
+        _META_RE_TEMPLATE.format(name=re.escape(META_NAME)), re.IGNORECASE
+    )
+    last = "Homepage could not be retrieved."
+    for scheme in ("https", "http"):
+        url = f"{scheme}://{hostname}/"
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+                res = await client.get(url)
+        except httpx.HTTPError as exc:
+            last = f"Could not fetch {url} ({type(exc).__name__})."
+            continue
+        if res.status_code != 200:
+            last = f"{url} returned HTTP {res.status_code}."
+            continue
+        for match in pattern.finditer(res.text or ""):
+            content = match.group(1) or match.group(2) or ""
+            if token in content:
+                return VerificationResult(True, "meta", f"Token found in a meta tag at {url}.")
+        last = (
+            f"No <meta name=\"{META_NAME}\"> tag containing the token was found "
+            f"at {url}. If your app renders the tag client-side, it will not be "
+            "visible here — use the file method instead."
+        )
+    return VerificationResult(False, "meta", last)
+
+
 async def run_verification(
     hostname: str, token: str, method: str
 ) -> VerificationResult:
@@ -146,6 +204,8 @@ async def run_verification(
         return await verify_dns(hostname, token)
     if method == "http":
         return await verify_http(hostname, token)
+    if method == "meta":
+        return await verify_meta(hostname, token)
     return VerificationResult(False, method, "Unknown verification method.")
 
 
