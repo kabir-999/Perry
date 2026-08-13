@@ -10,7 +10,7 @@ The LLM never invents evidence; these functions are the sole source of it.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 from app.services.finding_types import FindingCandidate
 from app.services.http_client import FetchResult, Fetcher
@@ -597,6 +597,56 @@ def looks_pathish(param_name: str) -> bool:
     return param_name.lower() in _PATHISH_PARAMS
 
 
+async def check_path_traversal_on_path(
+    fetcher: Fetcher, url: str
+) -> list[FindingCandidate]:
+    """The same controlled traversal probe as `check_path_traversal`, but for
+    a discovered file/directory resource that has no query parameter to
+    inject into — the payload replaces the URL's own last path segment
+    instead. Reuses the same payload and detection regex; a resource simply
+    existing is never itself evidence of traversal."""
+    parts = urlsplit(url)
+    segments = parts.path.rsplit("/", 1)
+    if len(segments) != 2 or not segments[1]:
+        return []
+    probe_path = f"{segments[0]}/{_TRAVERSAL_PAYLOAD}"
+    probe = urlunsplit((parts.scheme, parts.netloc, probe_path, parts.query, ""))
+
+    baseline = await fetcher.fetch(url, use_cache=False)
+    result = await fetcher.fetch(probe, use_cache=False)
+    if not result.ok or not result.text:
+        return []
+    match = _PASSWD_RE.search(result.text)
+    # Require the passwd-shaped content to be new relative to the baseline
+    # response for this same resource — some soft-404/catch-all pages could
+    # otherwise coincidentally contain matching text on every request.
+    if not match or (baseline.ok and match.group(0) in (baseline.text or "")):
+        return []
+    return [
+        FindingCandidate(
+            title="Path traversal indicator on discovered resource",
+            category="input_validation",
+            severity="high",
+            confidence="potential",
+            url=url,
+            method="GET",
+            parameter=segments[1],
+            evidence=match.group(0)[:120],
+            request_summary=f"GET {probe}",
+            response_summary=f"HTTP {result.status_code}; passwd-shaped content "
+            "returned, absent from the baseline request.",
+            description="Replacing the final path segment of a discovered "
+            "resource with a directory-traversal sequence returned content "
+            "resembling /etc/passwd.",
+            impact="May allow reading arbitrary files outside the web root, "
+            "exposing source, configuration, or credentials.",
+            remediation="Resolve and validate paths against an allow-list; "
+            "never pass user input to filesystem APIs directly.",
+            dedup_key=f"path_traversal_resource|{parts.path}",
+        )
+    ]
+
+
 # Paths whose data is sensitive enough that serving it unauthenticated is a
 # finding worth surfacing (Groq decides final severity).
 _SENSITIVE_API_RE = re.compile(
@@ -679,6 +729,179 @@ async def check_api_security(
                 )
             )
     return findings
+
+
+# Harmless canary payloads only — never an executable payload, never content
+# that would do anything if actually executed. `disallowed_type` probes
+# whether a non-text extension is accepted at all; `traversal_filename`
+# probes whether a path-traversal-shaped filename is accepted verbatim.
+_UPLOAD_CANARY_CONTENT = b"sentinel-upload-canary"
+_UPLOAD_CANARIES = (
+    ("benign", "sentinel_canary.txt", "text/plain"),
+    ("disallowed_type", "sentinel_canary.php", "application/x-php"),
+    ("traversal_filename", "../../tmp/sentinel_traversal_canary.txt", "text/plain"),
+)
+
+
+async def check_upload_endpoint(fetcher: Fetcher, upload) -> list[FindingCandidate]:
+    """Safe, non-destructive verification of a discovered upload endpoint.
+
+    Uploads only harmless canary files (never executable content) and never
+    deletes/overwrites/modifies anything else. Distinguishes:
+
+        endpoint detected -> upload tested -> weak validation detected
+        -> vulnerability verified (uploaded content confirmed accessible)
+
+    A discovered upload endpoint alone (before this runs) is reported
+    separately, at Low/informational — this function is what may raise that.
+    """
+    accepted: dict[str, FetchResult] = {}
+    for kind, filename, content_type in _UPLOAD_CANARIES:
+        result = await fetcher.fetch(
+            upload.url,
+            method=upload.method,
+            use_cache=False,
+            files={upload.field_name: (filename, _UPLOAD_CANARY_CONTENT, content_type)},
+        )
+        if result.ok and 200 <= (result.status_code or 0) < 300:
+            accepted[kind] = result
+
+    if not accepted:
+        # Rejected every canary — validation is doing its job. No finding
+        # beyond the existing "endpoint detected" note.
+        return []
+
+    findings: list[FindingCandidate] = []
+    weak_validation = "disallowed_type" in accepted or "traversal_filename" in accepted
+    findings.append(
+        FindingCandidate(
+            title=(
+                "Upload endpoint accepted a disallowed file type/name"
+                if weak_validation
+                else "Upload endpoint tested — accepted a plain-text canary"
+            ),
+            category="input_validation" if weak_validation else "configuration",
+            severity="medium" if weak_validation else "low",
+            confidence="potential",
+            url=upload.url,
+            method=upload.method,
+            parameter=upload.field_name,
+            evidence="Accepted canary uploads: "
+            + ", ".join(f"{kind} (HTTP {r.status_code})" for kind, r in accepted.items()),
+            request_summary=f"{upload.method} {upload.url} (multipart canary upload)",
+            description="Sentinel uploaded harmless canary files with a "
+            "disallowed extension and/or a path-traversal-shaped filename "
+            "to verify server-side upload validation.",
+            impact=(
+                "Weak file-type/filename validation on uploads can allow "
+                "storing content with a dangerous extension or escaping the "
+                "intended upload directory."
+                if weak_validation
+                else ""
+            ),
+            remediation="Validate uploaded file extension and content-type "
+            "against an allow-list; sanitize/regenerate filenames server-side; "
+            "store uploads outside any executable web root.",
+            dedup_key=f"file_upload_validation|{urlparse(upload.url).path}",
+        )
+    )
+
+    # Only escalate to a verified finding if Sentinel can actually retrieve
+    # the canary it just uploaded — never guess a storage URL.
+    location = accepted.get("disallowed_type") or accepted.get("benign")
+    loc_header = location.header("location") if location else ""
+    if not loc_header:
+        return findings
+    check_url = urljoin(upload.url, loc_header)
+    fetch_res = await fetcher.fetch(check_url, use_cache=False)
+    if fetch_res.ok and fetch_res.status_code == 200 and _UPLOAD_CANARY_CONTENT.decode() in (fetch_res.text or ""):
+        findings.append(
+            FindingCandidate(
+                title="Uploaded file is publicly accessible",
+                category="input_validation",
+                severity="high",
+                confidence="confirmed",
+                url=check_url,
+                method="GET",
+                parameter=upload.field_name,
+                evidence="Canary content matched at the location the server returned.",
+                request_summary=f"GET {check_url}",
+                response_summary=f"HTTP {fetch_res.status_code}; canary content present.",
+                description="A canary file uploaded by Sentinel was retrievable "
+                "at the location the server returned, confirming uploaded "
+                "content is served back without further gating.",
+                impact="An attacker-controlled file may be servable directly; "
+                "combined with weak type validation this can enable stored "
+                "malicious content or, if executed by the server, code execution.",
+                remediation="Serve uploaded files from a non-executable "
+                "location with randomized names and a correct, enforced "
+                "content-type; never execute uploaded files.",
+                dedup_key=f"file_upload_accessible|{urlparse(upload.url).path}",
+            )
+        )
+    return findings
+
+
+async def check_authz_boundary(
+    fetcher: Fetcher, url: str, auth_header: str | None
+) -> list[FindingCandidate]:
+    """Differential auth check using exactly one dev-supplied credential.
+
+    `check_api_security` already flags a sensitive endpoint that's wide open
+    with *no* credential at all. What that check cannot see is whether the
+    server is actually looking at the credential once one exists — sending
+    the same request with and without it and getting a byte-identical
+    response from a sensitive-looking endpoint suggests authorization isn't
+    being enforced for this identity. This never brute-forces, never tries
+    another identity's credential, and never fabricates a finding when no
+    credential was supplied — callers should record that as inconclusive
+    instead of calling this at all.
+    """
+    if not auth_header:
+        return []
+    header_name, sep, header_value = auth_header.partition(":")
+    headers = (
+        {header_name.strip(): header_value.strip()}
+        if sep
+        else {"Authorization": auth_header}
+    )
+    unauth = await fetcher.fetch(url, use_cache=True)
+    authed = await fetcher.fetch(url, headers=headers, use_cache=False)
+    if not unauth.ok or not authed.ok:
+        return []
+    path = urlparse(url).path
+    if (
+        unauth.status_code == 200
+        and authed.status_code == 200
+        and unauth.text == authed.text
+        and unauth.body_bytes > 2
+        and _SENSITIVE_API_RE.search(path)
+    ):
+        return [
+            FindingCandidate(
+                title="Sensitive endpoint response identical with and without credentials",
+                category="authorization",
+                severity="medium",
+                confidence="potential",
+                url=url,
+                evidence="Authenticated and unauthenticated requests to a "
+                "sensitive-looking endpoint returned byte-identical responses.",
+                request_summary=f"GET {url} — with vs without the supplied credential",
+                response_summary=f"HTTP {unauth.status_code} both times; identical body "
+                f"({unauth.body_bytes} bytes).",
+                description="A sensitive-looking endpoint returned the exact "
+                "same response whether or not the supplied credential was "
+                "sent, suggesting the server may not be enforcing "
+                "authorization for this identity's requests.",
+                impact="Authorization may not be enforced, allowing broader "
+                "access than intended for this identity.",
+                remediation="Confirm the endpoint validates the supplied "
+                "credential and enforces per-identity authorization, not "
+                "just authentication.",
+                dedup_key=f"authz_boundary|{path}",
+            )
+        ]
+    return []
 
 
 async def check_open_redirect(

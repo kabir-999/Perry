@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import NewScan from "./pages/NewScan";
+import ProjectDetail from "./pages/ProjectDetail";
+import Projects from "./pages/Projects";
 import ScanDetail from "./pages/ScanDetail";
 import type { UserRole } from "./types";
 
@@ -49,6 +51,8 @@ function Routing() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="projects" element={<Projects />} />
+        <Route path="projects/:targetId" element={<ProjectDetail />} />
         <Route path="scans/new" element={<NewScan />} />
         <Route path="scans/:scanId" element={<ScanDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />

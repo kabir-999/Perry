@@ -219,6 +219,10 @@ class ScanManager:
             concurrency=payload.concurrency or 0,
             rate_limit_per_second=payload.rate_limit_per_second or 0,
             repo_url=(payload.repo_url or "").strip()[:2048],
+            custom_test_cases_json=(
+                json.dumps([c.model_dump() for c in payload.custom_test_cases])
+                if payload.custom_test_cases else ""
+            ),
             # Without a confirmed authorization statement the scan stays
             # read-only: discovery and passive checks, no attack payloads.
             passive_only=not active_enabled,
@@ -273,6 +277,7 @@ class ScanManager:
 
         repo_url = ""
         passive_only = False
+        auth_header: str | None = None
         try:
             async with AsyncSessionLocal() as db:
                 scan = await db.get(Scan, scan_id)
@@ -280,6 +285,23 @@ class ScanManager:
                     return
                 repo_url = scan.repo_url
                 passive_only = scan.passive_only
+                custom_test_cases = (
+                    json.loads(scan.custom_test_cases_json)
+                    if scan.custom_test_cases_json else []
+                )
+                # A test credential is only ever used for a scan that's
+                # already running active tests against a verified target —
+                # never for passive-only scans, and never fetched otherwise.
+                if not passive_only and scan.user_id is not None:
+                    verified = (await db.execute(
+                        select(VerifiedTarget).where(
+                            VerifiedTarget.user_id == scan.user_id,
+                            VerifiedTarget.hostname == scope.hostname,
+                            VerifiedTarget.verification_status == tv.VERIFIED,
+                        )
+                    )).scalar_one_or_none()
+                    if verified is not None:
+                        auth_header = verified.auth_header
                 scan.status = ScanStatus.FAST_SCANNING.value
                 scan.started_at = datetime.now(timezone.utc)
                 await db.commit()
@@ -307,6 +329,8 @@ class ScanManager:
                         repo_url=repo_url,
                         passive_only=passive_only,
                         include_repo=include_repo,
+                        auth_header=auth_header,
+                        custom_test_cases=custom_test_cases,
                     ),
                     timeout=deep_scan_module.settings.DEEP_SCAN_TIMEOUT_SECONDS,
                 )
@@ -525,6 +549,7 @@ class ScanManager:
                         impact=cand.impact,
                         remediation=cand.remediation,
                         risk_score=cand.risk_score,
+                        fingerprint=cand.key()[:512],
                     )
                 )
 
@@ -571,7 +596,34 @@ class ScanManager:
             findings_result = await db.execute(
                 select(Finding).where(Finding.scan_id == scan.id)
             )
-            report = build_report(scan, list(findings_result.scalars().all()))
+
+            # Remediation verification: compare against the same target's
+            # two most recent prior completed scans (if any) to classify
+            # each current finding as OPEN/REGRESSED/UNVERIFIED, and report
+            # what was fixed since the last scan. Never touches source code.
+            prior_scans = (await db.execute(
+                select(Scan.id)
+                .where(Scan.target_id == scan.target_id, Scan.id != scan.id,
+                       Scan.status == ScanStatus.COMPLETED.value)
+                .order_by(Scan.completed_at.desc())
+                .limit(2)
+            )).scalars().all()
+            prior_fingerprints = None
+            prior_prior_fingerprints = None
+            if prior_scans:
+                prior_fingerprints = set((await db.execute(
+                    select(Finding.fingerprint).where(Finding.scan_id == prior_scans[0])
+                )).scalars().all())
+                if len(prior_scans) > 1:
+                    prior_prior_fingerprints = set((await db.execute(
+                        select(Finding.fingerprint).where(Finding.scan_id == prior_scans[1])
+                    )).scalars().all())
+
+            report = build_report(
+                scan, list(findings_result.scalars().all()),
+                prior_fingerprints=prior_fingerprints,
+                prior_prior_fingerprints=prior_prior_fingerprints,
+            )
             db.add(
                 Report(
                     scan_id=scan.id,

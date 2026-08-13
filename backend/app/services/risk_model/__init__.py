@@ -325,6 +325,13 @@ def classify(finding) -> str:
         return VULNERABILITY
     if finding.category in ("security_headers", "configuration"):
         return SECURITY_HARDENING
+    if finding.category == "custom_test":
+        # A user-defined test has no known CVSS vector — scoring it as a
+        # confirmed vulnerability would fabricate a score for a condition
+        # Sentinel doesn't actually understand. It still contributes via the
+        # generic hardening weight (never zero, unlike a purely
+        # informational finding) so a declared severity isn't meaningless.
+        return SECURITY_HARDENING
     if finding.category in ("attack_surface",) or finding.severity == "info":
         return INFORMATIONAL
     if finding.category == "information_exposure":

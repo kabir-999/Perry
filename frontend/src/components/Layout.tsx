@@ -44,6 +44,18 @@ export default function Layout() {
             >
               Dashboard
             </NavLink>
+            <NavLink
+              to="/projects"
+              className={({ isActive }) =>
+                `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  isActive
+                    ? "text-[#c2410c]"
+                    : "text-[#6f6552] hover:text-[#3a3122]"
+                }`
+              }
+            >
+              Projects
+            </NavLink>
             <Link
               to="/scans/new"
               className="lift rounded-lg bg-[#c2410c] px-3.5 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#9a3412]"

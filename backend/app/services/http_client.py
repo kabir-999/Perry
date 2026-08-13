@@ -129,11 +129,14 @@ class Fetcher:
         headers: Optional[dict[str, str]] = None,
         json: object = None,
         data: Optional[dict] = None,
+        files: Optional[dict] = None,
     ) -> FetchResult:
         # Requests with custom headers or a body (e.g. POST form/JSON tests, a
-        # spoofed Host for VHost probing) are never cached — the response
-        # depends on them.
-        cacheable = use_cache and not headers and json is None and data is None
+        # spoofed Host for VHost probing, a multipart file upload) are never
+        # cached — the response depends on them.
+        cacheable = (
+            use_cache and not headers and json is None and data is None and files is None
+        )
         key = (method.upper(), url, follow_redirects)
         if cacheable and key in self._cache:
             return self._cache[key]
@@ -151,7 +154,7 @@ class Fetcher:
             self.requests_made += 1
 
         result = await self._do_fetch(
-            url, method, follow_redirects, headers, json, data
+            url, method, follow_redirects, headers, json, data, files
         )
         if cacheable:
             self._cache[key] = result
@@ -165,6 +168,7 @@ class Fetcher:
         headers: Optional[dict[str, str]] = None,
         json: object = None,
         data: Optional[dict] = None,
+        files: Optional[dict] = None,
     ) -> FetchResult:
         started = time.perf_counter()
         request_kwargs: dict = {"follow_redirects": follow_redirects}
@@ -174,6 +178,8 @@ class Fetcher:
             request_kwargs["json"] = json
         if data is not None:
             request_kwargs["data"] = data
+        if files is not None:
+            request_kwargs["files"] = files
 
         # A single dropped packet must not read as "this path is safe" —
         # one bounded retry distinguishes a transient blip from a real

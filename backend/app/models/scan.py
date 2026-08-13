@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.models.enums import ScanStatus
+from app.services.crypto_columns import EncryptedText
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -71,6 +72,9 @@ class Scan(Base):
     # Read-only scan: no active injection payloads were sent. Set when the
     # user did not confirm authorization for the target.
     passive_only: Mapped[bool] = mapped_column(default=False)
+    # User-defined custom test cases for this scan (JSON list of
+    # CustomTestCase), only ever executed when the scan runs active tests.
+    custom_test_cases_json: Mapped[str] = mapped_column(Text, default="")
     # LOCAL_CODE | CI_CD | AUTHORIZED_DEPLOYMENT | PASSIVE_WEB
     scan_type: Mapped[str] = mapped_column(String(32), default="PASSIVE_WEB")
     # Verification state of the target at the time the scan ran.
@@ -155,9 +159,11 @@ class ScanEvent(Base):
         UUID(as_uuid=True), ForeignKey("scans.id", ondelete="CASCADE")
     )
     event_type: Mapped[str] = mapped_column(String(64))
-    message: Mapped[str] = mapped_column(Text, default="")
+    # Encrypted at rest via Postgres pgcrypto (see crypto_columns.py) — a
+    # database-only compromise never exposes scan activity log content.
+    message: Mapped[str] = mapped_column(EncryptedText, default="")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
 
     scan: Mapped["Scan"] = relationship(back_populates="events")

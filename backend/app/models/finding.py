@@ -45,6 +45,11 @@ class Finding(Base):
     # Deterministic risk score, computed by the risk_engine (Phase 4).
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
 
+    # Stable across scans of the same target (the finding's own dedup key,
+    # which never includes scan_id) — lets a later scan recognize "this is
+    # the same underlying issue" without any source-code fix-tracking.
+    fingerprint: Mapped[str] = mapped_column(String(512), default="", index=True)
+
     # LLM Security Analyst enrichment (Phase 5). Nullable until analyzed.
     llm_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
     llm_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

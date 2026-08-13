@@ -15,7 +15,7 @@ interesting (keeps it fast and non-brute-force).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 from app.services.discovery_types import DiscoveredParam
@@ -72,6 +72,19 @@ def encode_variants(payload: str) -> list[str]:
             seen.add(v)
             out.append(v)
     return out
+
+
+def unicode_slash_variants(payload: str) -> list[str]:
+    """Overlong-UTF-8 and fullwidth slash substitutions — a classic filter
+    bypass for traversal sequences a naive `"../"` string check would miss.
+    Only meaningful where the raw path separator itself is the thing being
+    filtered; not applied to XSS/SQLi payloads."""
+    if "/" not in payload:
+        return []
+    return [
+        payload.replace("/", "%c0%af"),   # overlong UTF-8 encoding of '/'
+        payload.replace("/", "／"),   # fullwidth solidus
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +174,12 @@ class _Test:
     applies: object  # Callable[[ParamTarget], bool]
     payloads: list  # primary first, then mutated variants to try if negative
     detect: object  # Callable[[str, AnalyzedResponse, AnalyzedResponse], str|None]
+    # Encoders escalate the *primary* payload only, and only after every
+    # literal payload above came back negative — encoding every payload for
+    # every test would multiply requests without adding signal for
+    # vulnerability classes where the plain-text payload set already covers
+    # the realistic cases (XSS, SQLi).
+    encoders: list = field(default_factory=list)
 
 
 # Detectors receive: payload, baseline raw text, test raw text.
@@ -202,10 +221,10 @@ _TESTS: list[_Test] = [
     _Test("Path Traversal", "input_validation", "path_traversal", "high",
           lambda t: t.name.lower() in _PATHISH,
           ["../../../../../../etc/passwd", "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"],
-          _trav_detect),
+          _trav_detect, encoders=[encode_variants, unicode_slash_variants]),
     _Test("Command Injection", "input_validation", "cmd_injection", "high",
           lambda t: t.name.lower() in _CMDISH,
-          [";id", "|id", "`id`", "$(id)"], _cmd_detect),
+          [";id", "|id", "`id`", "$(id)"], _cmd_detect, encoders=[encode_variants]),
 ]
 
 
@@ -276,6 +295,7 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
     for test in applicable:
         # Primary payload, then mutated variants until one produces evidence
         # (keeps it fast; stops at the first hit).
+        hit = False
         for payload in test.payloads[:4]:
             res = await _send(fetcher, target, payload)
             if not res.ok:
@@ -287,7 +307,32 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
                         target, test, payload, evidence, "potential", base, analyze(res)
                     )
                 )
+                hit = True
                 break
+
+        # Every literal payload came back negative — escalate to encoded
+        # variants of the primary payload only where encoding is actually
+        # meaningful (byte-level URL encoding doesn't apply to JSON body or
+        # header values the same way it does to query/form values).
+        if not hit and test.encoders and target.location in ("query", "form"):
+            tried = set(test.payloads[:4])
+            variants: list[str] = []
+            for encoder in test.encoders:
+                for v in encoder(test.payloads[0]):
+                    if v not in tried and v not in variants:
+                        variants.append(v)
+            for payload in variants[:4]:
+                res = await _send(fetcher, target, payload)
+                if not res.ok:
+                    continue
+                evidence = test.detect(payload, base_raw, res.text)
+                if evidence:
+                    out.append(
+                        _finding(
+                            target, test, payload, evidence, "potential", base, analyze(res)
+                        )
+                    )
+                    break
     return out
 
 

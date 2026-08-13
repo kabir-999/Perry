@@ -44,6 +44,39 @@ CLI / CI-CD pipeline:
   (`ParamTarget → PayloadStrategy → RequestBuilder → ResponseDiff`) for
   reflected XSS, SQL/NoSQL injection, command injection, path traversal,
   open redirect, and HTTP parameter pollution — adaptive, not brute-forced.
+  API-discovered parameters run through this same engine, not just
+  crawler-discovered ones. Path traversal also runs against file-shaped
+  discovered directory/file paths directly, not only URL parameters.
+  Path-traversal and command-injection payloads escalate to a few
+  URL-encoded/double-encoded/unicode-overlong variants, but only after the
+  plain payload came back negative and only where byte-level encoding is
+  meaningful (query/form values, not JSON bodies or headers).
+- **File upload testing**: discovered upload endpoints are actually probed
+  with harmless canary files (never executable content) to check whether a
+  disallowed extension or a path-traversal-shaped filename is accepted, and
+  — only if Sentinel can fetch back its own canary — whether the uploaded
+  content is served back at all. A bare "upload endpoint exists" is never
+  itself reported as a vulnerability.
+- **Authentication/authorization testing**: a developer-supplied test
+  credential (set via `POST /api/targets/{id}/credential`, never logged or
+  returned) lets Sentinel compare an authenticated vs. unauthenticated
+  request to the same sensitive-looking endpoint. Without a credential, this
+  is reported as explicitly **inconclusive** in the test matrix — never
+  assumed safe or vulnerable. This is a heuristic differential check with
+  one identity, not a real IDOR/BOLA proof; true IDOR detection only fires
+  when the same scan happens to observe two distinct concrete IDs for the
+  same parameter (rare — the crawler intentionally collapses ID variation
+  during discovery), and reports inconclusive otherwise.
+- **User-defined custom test cases**: a scan can include up to 20 ad hoc
+  tests (name, path, method, input location, payload, validation condition,
+  severity), executed through the exact same request/response/evidence
+  pipeline as every built-in active test — scope-checked, budget-shared,
+  and severity-capped the same way. Kept separate from the static wordlists.
+- **Independent subdomain assessment**: up to a handful of resolved,
+  reachable subdomains (bounded, sharing the scan's one request budget) get
+  their own not-found baseline, passive header/cookie/CORS checks, and a
+  small API/active pass — not just DNS discovery reused as VHost-probe
+  candidates. A DNS record alone is never a finding.
 - **Passive checks**: security headers, cookie flags, CORS, server-version
   disclosure, directory listing, debug/stack-trace leakage, unauthenticated
   sensitive API endpoints.
@@ -58,6 +91,11 @@ CLI / CI-CD pipeline:
   instead of two.
 - **Risk scoring**: deterministic, auditable, CVSS v4.0 + hardening-model
   based — see [ARCHITECTURE.md](./ARCHITECTURE.md#sentinel-risk-model-v1).
+- **Remediation verification**: each finding carries a fingerprint stable
+  across scans of the same target. A report compares against the target's
+  last two completed scans and marks each finding `OPEN`, `REGRESSED`
+  (fixed, then came back), or `UNVERIFIED` (no scan history yet), plus a
+  count of issues fixed since the last scan. Never touches source code.
 - **AI layer**: exactly one Groq call per scan, strict Pydantic-validated
   output, explains the deterministic findings — it does not invent evidence
   or set severity.
@@ -266,9 +304,10 @@ GET    /api/auth/me                         Current user profile
 
 POST   /api/targets                         Register a target, issue verification challenge
 POST   /api/targets/{id}/verify             Check the ownership challenge
+POST   /api/targets/{id}/credential         Set/clear the test credential for authz checks
 GET    /api/targets                         List your targets
 
-POST   /api/scans                           Create + launch a scan
+POST   /api/scans                           Create + launch a scan (optionally with custom_test_cases)
 GET    /api/scans                           List your scans
 GET    /api/scans/{scan_id}                 Get one scan
 GET    /api/scans/{scan_id}/live            Live snapshot (initial load)
@@ -279,7 +318,8 @@ GET    /api/scans/{scan_id}/subdomains      Discovered subdomains
 GET    /api/scans/{scan_id}/source-findings Per-issue source-code findings
 GET    /api/scans/{scan_id}/repositories    Repos associated with the scan
 GET    /api/scans/{scan_id}/events          Scan lifecycle event log
-GET    /api/scans/{scan_id}/report          Generated JSON report
+GET    /api/scans/{scan_id}/report          Generated JSON report (includes
+                                             per-finding verification_status)
 POST   /api/scans/{scan_id}/cancel          Cancel a pending/running scan
 
 GET    /api/dashboard/summary               Aggregate stats, scoped to you
@@ -334,6 +374,7 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | last_error | Text | |
 | verified_at / verification_expires_at | DateTime(tz), nullable | |
 | active_testing_enabled | Boolean | default `False` |
+| auth_header | Text, nullable | dev-supplied test credential for authz differential checks; never logged/audited, never returned by any GET |
 | created_at | DateTime(tz) | |
 
 ### `audit_logs`
@@ -373,6 +414,7 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | fast_scan_homepage_text / fast_scan_homepage_url | Text/String | cache to avoid refetching |
 | repo_info_json / repo_url | Text/String(2048) | linked repo, if any |
 | passive_only | Boolean | default `False` |
+| custom_test_cases_json | Text | user-defined test cases for this scan (JSON list), only executed when active |
 | scan_type | String(32) | `LOCAL_CODE`\|`CI_CD`\|`AUTHORIZED_DEPLOYMENT`\|`PASSIVE_WEB` |
 | authorization_status | String(32) | target verification state at scan time |
 | final_risk | String(16) | |
@@ -439,6 +481,7 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | evidence / request_summary / response_summary / description / impact / remediation | Text | |
 | risk_score | Float | deterministic score |
 | llm_verdict / llm_confidence / llm_explanation / llm_false_positive_reason | nullable | LLM enrichment |
+| fingerprint | String(512), indexed | stable across scans of the same target; used for OPEN/REGRESSED/UNVERIFIED remediation tracking in the report |
 | created_at | DateTime(tz) | |
 
 ### `reports`
@@ -489,6 +532,36 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | `Confidence` | `confirmed`, `potential`, `uncertain`, `false_positive` |
 | `DiscoveryMethod` | `crawler`, `directory_scan`, `api_discovery`, `robots_txt`, `sitemap`, `manual` |
 | `ReportFormat` | `html`, `pdf`, `json` |
+
+## Limitations
+
+Honestly, not aspirationally — these are the current, real edges:
+
+- **IDOR/BOLA** mostly reports **inconclusive**. It only fires when the same
+  scan happens to observe two distinct concrete values for the same
+  parameter *and* a test credential is supplied — the crawler intentionally
+  collapses ID variation during discovery, so this is rare by design, not a
+  bug.
+- **Auth/authz testing** requires a developer-supplied credential
+  (`POST /api/targets/{id}/credential`). Without one, it never guesses —
+  it reports the test as inconclusive.
+- **File upload testing** only ever sends inert canary content (never a
+  real executable payload) and only escalates to a "confirmed accessible"
+  finding when Sentinel can fetch back its own canary — it does not attempt
+  to execute anything it uploads.
+- **Custom test cases** are capped at 20 per scan and run through the same
+  safety limits as every built-in active test — no elevated privileges.
+- **Subdomain assessment** is bounded (`SUBDOMAIN_ASSESS_LIMIT`, default 5)
+  and shares the scan's one request budget — it is not a full independent
+  scan of every discovered subdomain.
+- **Remediation verification** compares fingerprints against the same
+  target's last two completed scans only; it does not track a longer
+  history, and a check that didn't run in a given scan can't confirm
+  something else was actually fixed.
+- **Payload encoding** escalates only for path traversal and command
+  injection, and only on query/form parameters — XSS/SQLi rely on their
+  existing plain-payload set, and JSON body/header values aren't
+  byte-level re-encoded the same way query strings are.
 
 ## Running Tests
 

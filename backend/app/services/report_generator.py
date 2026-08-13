@@ -31,8 +31,39 @@ def _ai_block(scan: Scan) -> dict:
     }
 
 
-def build_report(scan: Scan, findings: list[Finding]) -> dict:
+def _verification_status(
+    fingerprint: str,
+    *,
+    prior_fingerprints: set[str] | None,
+    prior_prior_fingerprints: set[str] | None,
+) -> str:
+    """Classify a current finding against the same target's scan history.
+
+    Never inspects or modifies source code — this is purely a comparison of
+    what was reported in earlier scans of this same target.
+    """
+    if prior_fingerprints is None:
+        # No completed prior scan of this target exists at all — there is
+        # nothing to compare against.
+        return "UNVERIFIED"
+    if fingerprint in prior_fingerprints:
+        return "OPEN"
+    if prior_prior_fingerprints and fingerprint in prior_prior_fingerprints:
+        # Absent from the immediately preceding scan (i.e. it was FIXED),
+        # but present again now.
+        return "REGRESSED"
+    return "OPEN"  # newly discovered this scan; nothing to regress from
+
+
+def build_report(
+    scan: Scan,
+    findings: list[Finding],
+    *,
+    prior_fingerprints: set[str] | None = None,
+    prior_prior_fingerprints: set[str] | None = None,
+) -> dict:
     by_severity: dict[str, list[dict]] = {s: [] for s in SEVERITY_ORDER}
+    current_fingerprints = {f.fingerprint for f in findings if f.fingerprint}
     for f in findings:
         entry = {
             "title": f.title,
@@ -44,10 +75,25 @@ def build_report(scan: Scan, findings: list[Finding]) -> dict:
             "risk_score": f.risk_score,
             "llm_verdict": f.llm_verdict,
             "remediation": f.remediation,
+            "verification_status": (
+                _verification_status(
+                    f.fingerprint,
+                    prior_fingerprints=prior_fingerprints,
+                    prior_prior_fingerprints=prior_prior_fingerprints,
+                )
+                if f.fingerprint else "UNVERIFIED"
+            ),
         }
         by_severity.setdefault(f.severity, []).append(entry)
 
     severity_counts = {s: len(items) for s, items in by_severity.items()}
+
+    # Findings that were present in the prior scan but aren't anymore —
+    # reported separately since there's no "current" Finding row for them.
+    fixed_count = (
+        len(prior_fingerprints - current_fingerprints)
+        if prior_fingerprints is not None else 0
+    )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -68,6 +114,10 @@ def build_report(scan: Scan, findings: list[Finding]) -> dict:
         "severity_counts": severity_counts,
         "total_findings": len(findings),
         "findings_by_severity": by_severity,
+        "remediation": {
+            "has_prior_scan": prior_fingerprints is not None,
+            "fixed_since_last_scan": fixed_count,
+        },
     }
 
 

@@ -153,11 +153,14 @@ def _extract(base_url, html, scope, result, frontier, visited, seen_shapes):
         action = urljoin(base_url, (form.get("action") or "").strip() or base_url)
         method = (form.get("method") or "GET").upper()
         names = []
-        has_upload = (form.get("enctype") or "").lower() == "multipart/form-data"
+        enctype = (form.get("enctype") or "").lower() or "application/x-www-form-urlencoded"
+        has_upload = enctype == "multipart/form-data"
+        file_field_name = ""
         for field_tag in form.find_all(["input", "textarea", "select"]):
             name = field_tag.get("name")
             if (field_tag.get("type") or "").lower() == "file":
                 has_upload = True
+                file_field_name = name or file_field_name
             if name:
                 names.append(name)
         if not scope.in_scope(action):
@@ -166,7 +169,14 @@ def _extract(base_url, html, scope, result, frontier, visited, seen_shapes):
             DiscoveredForm(url=action, method=method, params=names, has_upload=has_upload)
         )
         if has_upload:
-            result.upload_endpoints.append(UploadEndpoint(url=action, method=method or "POST"))
+            result.upload_endpoints.append(
+                UploadEndpoint(
+                    url=action,
+                    method=method or "POST",
+                    field_name=file_field_name or "file",
+                    enctype=enctype or "multipart/form-data",
+                )
+            )
         for name in names:
             result.params.append(
                 DiscoveredParam(

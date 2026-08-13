@@ -44,6 +44,13 @@ class VerifiedTarget(Base):
     )
     active_testing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # A raw HTTP header value (e.g. "Authorization: Bearer ...") for a test
+    # identity the developer controls, used only for differential
+    # authenticated-vs-unauthenticated checks against this host. Nullable;
+    # set only by the owning developer once this target is VERIFIED; never
+    # written to AuditLog and never returned from GET /targets.
+    auth_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

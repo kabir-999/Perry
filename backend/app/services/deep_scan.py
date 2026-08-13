@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from app.config import settings
-from app.services import active_engine, security_checks
+from app.services import active_engine, custom_tests as custom_tests_module, security_checks
 from app.services.api_discovery import discover_apis
 from app.services.crawler import crawl
 from app.services.directory_scanner import discover_directories
@@ -41,7 +41,7 @@ from app.services.scope_policy import (
 )
 from app.services.severity_policy import apply_policy
 from app.services.scan_summary import build_scan_summary
-from app.services.scope import TargetScope
+from app.services.scope import TargetScope, build_scope, InvalidTargetError
 from app.services.security_test_cases import enabled_parameter_test_cases
 from app.services.subdomain_scanner import DiscoveredSubdomain, discover_subdomains
 from app.services.vhost_scanner import discover_vhosts
@@ -114,6 +114,8 @@ async def run_deep_scan(
     repo_url: str = "",
     passive_only: bool = False,
     include_repo: bool = True,
+    auth_header: str | None = None,
+    custom_test_cases: list[dict] | None = None,
 ) -> DeepScanResult:
     client = build_async_client(
         timeout=settings.DEEP_REQUEST_TIMEOUT_SECONDS,
@@ -153,7 +155,7 @@ async def run_deep_scan(
                 max_depth=settings.CRAWL_MAX_DEPTH,
             ),
             discover_subdomains(scope),
-            discover_directories(fetcher, scope, not_found),
+            discover_directories(fetcher, scope, not_found, passive_only=passive_only),
         )
         result.subdomains = subdomains
         result.findings.extend(dir_findings)
@@ -211,6 +213,15 @@ async def run_deep_scan(
         # File-upload endpoints (detection) + VHost isolation assessment.
         result.findings.extend(_upload_findings(crawl_result.upload_endpoints))
         result.findings.extend(_vhost_findings(vhosts))
+        if not passive_only:
+            for upload in crawl_result.upload_endpoints:
+                result.findings.extend(
+                    await security_checks.check_upload_endpoint(fetcher, upload)
+                )
+
+        result.findings.extend(
+            await _assess_subdomains(fetcher, subdomains, passive_only=passive_only)
+        )
 
         # Merge discovered endpoints (crawler pages + dir hits + api + bundles).
         endpoints: dict[str, DiscoveredPath] = {}
@@ -218,6 +229,21 @@ async def run_deep_scan(
             endpoints.setdefault(path.key(), path)
         result.endpoints = list(endpoints.values())
         result.params = consolidate_parameters(crawl_result.params, api_params)
+
+        # API-discovered parameters weren't available before the gather above
+        # started (discover_apis runs concurrently with the active-test pass
+        # over crawl_params), so they never reached the active engine. Run
+        # them through the same engine now — same payload strategy, response
+        # analysis, and shared request budget as every other active test.
+        if api_params:
+            result.findings.extend(
+                await _run_active(fetcher, consolidate_parameters(api_params), passive_only)
+            )
+
+        if custom_test_cases and not passive_only:
+            result.findings.extend(
+                await custom_tests_module.run_custom_tests(fetcher, scope, custom_test_cases)
+            )
 
         await emit(
             {
@@ -240,11 +266,26 @@ async def run_deep_scan(
             e.url for e in result.endpoints
             if e.discovery_method in ("api_discovery", "js_bundle")
         ]
+        authz_status = "not_applicable"
         if api_urls:
             result.findings.extend(
                 await security_checks.check_api_security(fetcher, api_urls)
             )
-            
+            if not passive_only:
+                if auth_header:
+                    for u in api_urls[:15]:
+                        result.findings.extend(
+                            await security_checks.check_authz_boundary(
+                                fetcher, u, auth_header
+                            )
+                        )
+                    authz_status = "ran"
+                else:
+                    # No credential was supplied for this target — report
+                    # this explicitly as inconclusive rather than silently
+                    # skipping it or assuming the endpoints are safe.
+                    authz_status = "inconclusive_no_credential"
+
         if repo_analysis:
             result.repo_info = {
                 "provider": repo_analysis.repo.provider,
@@ -323,6 +364,7 @@ async def run_deep_scan(
             api_ran=bool(api_urls),
             fast_result=fast_result,
             passive_only=passive_only,
+            authz_status=authz_status,
         )
 
         await emit(
@@ -391,6 +433,56 @@ async def _passive_over_pages(
         if not res.ok:
             continue
         findings += security_checks.run_passive_checks(res, analyze(res))
+    return findings
+
+
+async def _assess_subdomains(
+    fetcher: Fetcher,
+    subdomains: list[DiscoveredSubdomain],
+    *,
+    passive_only: bool,
+) -> list[FindingCandidate]:
+    """Independent, bounded security assessment of resolved subdomains.
+
+    Discovery (DNS resolution, already wildcard-guarded) and VHost-probe
+    reuse happen elsewhere and are unchanged. This is the separate step the
+    original pipeline was missing: an in-scope, *reachable* subdomain gets
+    its own not-found baseline, passive header/cookie/CORS checks, and a
+    small API/parameter/active pass — reusing every existing building block
+    unmodified, sharing the one Fetcher (and its request budget) rather
+    than spinning up a second one. A DNS record alone is never a finding;
+    everything below still goes through the same evidence-based checks as
+    the primary target.
+    """
+    findings: list[FindingCandidate] = []
+    for sub in subdomains[: settings.SUBDOMAIN_ASSESS_LIMIT]:
+        if fetcher.budget_exhausted:
+            break
+        try:
+            sub_scope = build_scope(f"https://{sub.hostname}")
+        except InvalidTargetError:
+            continue
+
+        probe = await fetcher.fetch(sub_scope.origin, use_cache=True)
+        if not probe.ok:
+            # Resolves but unreachable over HTTPS — try plain HTTP once
+            # before giving up on this subdomain entirely.
+            try:
+                sub_scope = build_scope(f"http://{sub.hostname}")
+            except InvalidTargetError:
+                continue
+            probe = await fetcher.fetch(sub_scope.origin, use_cache=True)
+            if not probe.ok:
+                continue
+
+        sub_not_found = await learn_not_found_profile(fetcher, sub_scope.origin)
+        findings += security_checks.run_passive_checks(probe, analyze(probe))
+
+        api_paths, api_params = await discover_apis(fetcher, sub_scope, sub_not_found, set())
+        if not passive_only and api_params and not fetcher.budget_exhausted:
+            findings += await active_engine.run_active_tests(
+                fetcher, api_params, max_targets=5
+            )
     return findings
 
 
@@ -679,6 +771,8 @@ _TEST_CATALOG = [
     ("File Upload", True),
     ("VHost Assessment", True),
     ("API Security", "api"),
+    ("Authentication/Authorization", "api"),
+    ("Custom Tests", "active"),
 ]
 
 
@@ -717,6 +811,10 @@ def _classify_finding(f: FindingCandidate) -> str:
         return "VHost Assessment"
     if k.startswith("api_"):
         return "API Security"
+    if k.startswith("authz_boundary"):
+        return "Authentication/Authorization"
+    if k.startswith("custom_test"):
+        return "Custom Tests"
     return "Other"
 
 
@@ -735,6 +833,7 @@ def build_test_results(
     api_ran: bool,
     fast_result,
     passive_only: bool = False,
+    authz_status: str = "not_applicable",
 ) -> list[dict]:
     """One row per security test: pass / a finding (with worst severity and
     count) / not-applicable. Gives a complete picture, not just the threats."""
@@ -770,6 +869,18 @@ def build_test_results(
                     {"name": name, "status": "not_applicable", "severity": "",
                      "count": 0, "detail": ""}
                 )
+            continue
+
+        if name == "Authentication/Authorization" and authz_status == "inconclusive_no_credential":
+            # Never assume vulnerable (or safe) without evidence — no
+            # credential was supplied for this target, so the boundary
+            # between an authenticated and unauthenticated identity was
+            # never actually observed.
+            results.append(
+                {"name": name, "status": "inconclusive", "severity": "", "count": 0,
+                 "detail": "No credential supplied for this target — "
+                 "authorization boundary could not be verified."}
+            )
             continue
 
         if name == "HTTPS / TLS":

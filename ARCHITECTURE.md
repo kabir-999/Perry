@@ -37,11 +37,16 @@ flowchart TD
       PAR[Parameter discovery] ; SUB[Subdomain DNS<br/>wildcard-guarded] ; VH[VHost discovery<br/>wildcard-guarded]
     end
     subgraph "Active Testing Engine"
-      PT[ParamTarget<br/>query/form/json/header] --> PS[PayloadStrategy]
+      PT[ParamTarget<br/>query/form/json/header] --> PS[PayloadStrategy<br/>+ encoded variants if negative]
       PS --> RB[RequestBuilder] --> RD[ResponseDiff] --> EV[Evidence]
     end
     subgraph "Passive + Config Checks"
       HdrChk[Headers/Cookies/CORS] ; Info[Info exposure] ; ApiSec[API auth]
+    end
+    subgraph "New Testing Capabilities"
+      UP[Upload testing<br/>canary files] ; TRAV[Traversal on<br/>discovered resources]
+      AUTHZ[Authz differential<br/>credential vs none] ; CUST[Custom test cases]
+      SUBA[Subdomain assessment<br/>bounded, budget-shared]
     end
     subgraph "Repo Analysis (optional, if repo_url given)"
       SEC[Secret scan<br/>git-tracking aware] ; SAST[AST taint engine] ; DEP[Dependency/OSV<br/>+ reachability]
@@ -50,12 +55,14 @@ flowchart TD
     end
 
     DS --> Discovery
-    DS --> Active[Active Testing Engine<br/>XSS·SQLi·Traversal·RCE·HPP·Redirect]
+    Discovery -->|API params| Active[Active Testing Engine<br/>XSS·SQLi·Traversal·RCE·HPP·Redirect]
     DS --> Passive[Passive + Config Checks]
+    DS --> NewCaps[New Testing Capabilities]
     DS --> RepoAnalysis[Repo Analysis]
     Discovery --> AGG
     Active --> AGG[Finding Aggregator<br/>dedup + affected_urls]
     Passive --> AGG
+    NewCaps --> AGG
     RepoAnalysis --> AGG
     AGG --> RM[Sentinel Risk Model v1<br/>CVSS v4.0 + Hardening Model]
     RM --> SUMM[ScanSummary<br/>one structured payload]
@@ -64,6 +71,7 @@ flowchart TD
     AGG --> DB
     DS -->|live progress| SSE
     DB --> READ[GET /live, /stream, /findings, /report]
+    READ --> REMED[Remediation verification<br/>vs. prior scans of this target]
     SSE --> READ
     READ --> UI[Scan Detail page<br/>risk · summary · risk factors · tests · findings]
 ```
@@ -95,10 +103,14 @@ app/
 │   ├── fast_scanner.py   Stage 1: concurrent lightweight checks
 │   ├── deep_scan.py      Stage 2 orchestrator (concurrent stages) +
 │   │                     finding dedup + test-matrix builder + repo-analysis
-│   │                     wiring (`_convert_repo_findings`, `correlate`)
+│   │                     wiring (`_convert_repo_findings`, `correlate`) +
+│   │                     `_assess_subdomains` (bounded, budget-shared
+│   │                     independent assessment of resolved subdomains)
 │   ├── crawler.py        bounded BFS crawl; links/forms/params/uploads
+│   │                     (preserves the file-input field name + enctype)
 │   ├── directory_scanner.py   wordlist dir/file + sensitive-file checks;
-│   │                     redirects not followed for sensitive-file probes
+│   │                     redirects not followed for sensitive-file probes;
+│   │                     dispatches traversal-on-path for file-shaped hits
 │   ├── api_discovery.py  OpenAPI/Swagger + common API paths
 │   ├── parameter_discovery.py normalized param dedup
 │   ├── subdomain_scanner.py   DNS enumeration, guarded by the same
@@ -108,11 +120,31 @@ app/
 │   ├── active_engine.py  UNIFIED active testing: ParamTarget → PayloadStrategy
 │   │                     → RequestBuilder → ResponseDiff → Finding
 │   │                     (XSS, SQLi, traversal, command-injection, HPP,
-│   │                      open redirect; adaptive prioritization)
+│   │                      open redirect; adaptive prioritization). Runs
+│   │                     over crawler params, API-discovered params, and
+│   │                     each assessed subdomain's params. Path-traversal/
+│   │                     command-injection escalate to a few encoded
+│   │                     variants (`encode_variants`, `unicode_slash_variants`)
+│   │                     only after the plain payload came back negative.
+│   ├── custom_tests.py   executes user-defined `CustomTestCase` entries
+│   │                     through the same ParamTarget/RequestBuilder/
+│   │                     ResponseDiff pipeline as active_engine — no
+│   │                     separate HTTP handling or scoring
 │   ├── security_checks.py     passive checks (headers, cookies, CORS,
 │   │                     version, dir-listing, debug traces, sensitive files,
-│   │                     API security); redirects not followed for API probes
-│   ├── security_test_cases.py declarative test-case registry (extensible)
+│   │                     API security); redirects not followed for API/
+│   │                     sensitive-file probes. Also: `check_upload_endpoint`
+│   │                     (safe canary-file upload verification),
+│   │                     `check_path_traversal_on_path` (traversal against a
+│   │                     discovered resource's own path segment, reusing the
+│   │                     same payload/detection as the parameter-based
+│   │                     check), `check_authz_boundary` (differential
+│   │                     authenticated-vs-unauthenticated diff using a
+│   │                     dev-supplied credential)
+│   ├── security_test_cases.py declarative test-case registry — unused by
+│   │                     the real pipeline (active_engine.py is the actual
+│   │                     engine); kept only for the historical `SecurityTestCase`
+│   │                     shape, not extended
 │   ├── response_analyzer.py   fingerprint + soft-404/SPA profiling +
 │   │                     similarity + blocked-response (`INCONCLUSIVE`)
 │   │                     detection for blanket-WAF/auth-gate responses
@@ -149,7 +181,11 @@ app/
 │   ├── llm_security_analyst.py  Groq: one call, strict prompt, 1 retry,
 │   │                     Pydantic SecurityAssessment (risk_score/level/
 │   │                     summary/risk_factors/recommendation)
-│   ├── report_generator.py    JSON report (+ frontend builds the PDF)
+│   ├── report_generator.py    JSON report (+ frontend builds the PDF);
+│   │                     classifies each finding OPEN/REGRESSED/UNVERIFIED
+│   │                     against the target's last two completed scans by
+│   │                     a stable per-finding fingerprint, and reports a
+│   │                     fixed-since-last-scan count — never touches code
 │   ├── finding_types.py  FindingCandidate + severity ranks
 │   ├── discovery_types.py     crawl/discovery dataclasses
 │   └── wordlists.py      small embedded wordlists
@@ -254,6 +290,60 @@ Verification is TTL-limited (90 days) and tracked as
 exempt (there's no one else to ask permission from). Security-sensitive
 actions are appended to `AuditLog`; verification tokens and scan payloads
 are deliberately never written there.
+
+Once `VERIFIED`, the owning developer may additionally set a test
+credential (`POST /api/targets/{id}/credential` → `VerifiedTarget.auth_header`)
+— a raw header value for one identity they control, used only for
+differential authenticated-vs-unauthenticated checks against that host.
+Never logged, never audited, never returned from any `GET`. `scan_manager.py`
+looks it up at scan-run time only for a non-passive scan of a verified
+target, and passes it into `run_deep_scan` — nowhere else touches it.
+
+## New Testing Capabilities
+
+Closing gaps where something was discovered/detected but never actually
+tested — all integrated into the existing evidence → validation →
+severity → risk → reporting pipeline, no parallel implementations:
+
+```text
+Discovery → API param wiring → File upload testing → Traversal (path +
+resource) → Authentication/Authorization → Subdomain assessment →
+Custom tests → Payload strategy (+ encoding) → Evidence/validation →
+Severity/Risk → Reporting → Remediation verification → CI/CD gate
+```
+
+- **File upload testing** (`security_checks.check_upload_endpoint`) — safe
+  canary-file uploads (never executable content) distinguish *detected* →
+  *tested* → *weak validation* (disallowed extension/traversal-shaped
+  filename accepted) → *verified* (Sentinel fetches back its own canary and
+  confirms it's served). A bare detected endpoint never escalates on its own.
+- **Traversal on discovered resources** (`check_path_traversal_on_path`,
+  dispatched from `directory_scanner.py` for file-shaped hits) — reuses the
+  exact `_TRAVERSAL_PAYLOAD`/passwd-detection regex from the
+  parameter-based check, substituted into the resource's own path segment,
+  with a baseline comparison so a page that always contains passwd-shaped
+  text isn't misread as vulnerable.
+- **API injection testing** (`deep_scan.py`) — API-discovered parameters
+  now run through `active_engine.run_active_tests`, the same engine crawl
+  params already used, once `discover_apis` resolves them.
+- **Authentication/authorization** (`check_authz_boundary`) — see Auth &
+  Target Verification above. Without a credential, the test matrix records
+  this test as `inconclusive`, never guessed either way.
+- **User-defined custom test cases** (`custom_tests.py`,
+  `Scan.custom_test_cases_json`, `CustomTestCase` schema) — up to 20 per
+  scan, executed through the same `ParamTarget`/`build_request`/response
+  pipeline as every built-in test, scope-checked and severity-capped
+  identically. Deliberately separate from `wordlists.py`.
+- **Payload encoding** (`active_engine.py`) — `encode_variants` (already
+  defined, previously never called) and a new `unicode_slash_variants` now
+  escalate path-traversal/command-injection payloads, but only after the
+  plain payload came back negative and only for query/form locations.
+- **Independent subdomain assessment** (`deep_scan._assess_subdomains`) —
+  up to `settings.SUBDOMAIN_ASSESS_LIMIT` reachable, in-scope subdomains get
+  their own not-found baseline, passive checks, and a small API/active pass,
+  sharing the scan's one request budget. A DNS record alone is never a
+  finding — unreachable subdomains are skipped before any check runs.
+- **Remediation verification** — see `report_generator.py` above.
 
 ## Recent robustness hardening
 

@@ -67,11 +67,17 @@ async def create_scan(
 
 @router.get("", response_model=list[ScanRead])
 async def list_scans(
+    target_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_developer),
 ):
+    """All of the caller's scans, newest first. Pass `target_id` to scope
+    this to one project's history (e.g. the project detail page)."""
+    filters = [Scan.user_id == user.id]
+    if target_id is not None:
+        filters.append(Scan.target_id == target_id)
     result = await db.execute(
-        select(Scan).where(Scan.user_id == user.id).order_by(Scan.created_at.desc())
+        select(Scan).where(*filters).order_by(Scan.created_at.desc())
     )
     return result.scalars().all()
 

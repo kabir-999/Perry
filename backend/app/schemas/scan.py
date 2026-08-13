@@ -8,6 +8,51 @@ from app.models.enums import ScanStatus
 
 REQUIRED_AUTHORIZATION_PHRASE = "I confirm that I have authorization to test this target."
 
+_CUSTOM_TEST_LOCATIONS = ("query", "form", "json", "header")
+_CUSTOM_TEST_SEVERITIES = ("info", "low", "medium", "high", "critical")
+
+
+class CustomTestCase(BaseModel):
+    """One user-defined security test, executed through the same
+    ParamTarget -> RequestBuilder -> ResponseDiff -> Finding pipeline as
+    every built-in active test. Deliberately separate from the static
+    wordlists in wordlists.py — this is one ad hoc test per entry, scoped to
+    a single scan, not a reusable list of names."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    path: str = Field(..., min_length=1, max_length=2048)
+    method: str = Field(default="GET", pattern="^(?i)(GET|POST|PUT|PATCH|DELETE)$")
+    input: str = Field(..., min_length=1, max_length=200)
+    location: str = Field(default="query")
+    test: str = Field(..., min_length=1, max_length=2000, description="Payload/test value")
+    expected: str = Field(
+        default="differs",
+        description='Validation condition: "differs" (response differs '
+        'from baseline) or "contains:<substring>" (response body contains '
+        "the given substring).",
+    )
+    severity: str = Field(default="medium")
+
+    @field_validator("method")
+    @classmethod
+    def normalize_method(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("location")
+    @classmethod
+    def validate_location(cls, value: str) -> str:
+        if value not in _CUSTOM_TEST_LOCATIONS:
+            raise ValueError(f"location must be one of {_CUSTOM_TEST_LOCATIONS}")
+        return value
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, value: str) -> str:
+        if value not in _CUSTOM_TEST_SEVERITIES:
+            raise ValueError(f"severity must be one of {_CUSTOM_TEST_SEVERITIES}")
+        return value
+
 
 class ScanCreate(BaseModel):
     """Payload to create a new scan.
@@ -34,6 +79,14 @@ class ScanCreate(BaseModel):
         description="Optional public GitHub/GitLab repository for this site. "
         "When given it is analyzed directly; otherwise the scanner tries to "
         "discover the repo from the site itself.",
+    )
+    custom_test_cases: List[CustomTestCase] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Optional user-defined security tests, run through the "
+        "same active-testing pipeline as the built-in checks. Only executed "
+        "when the scan is authorized for active testing; scope- and "
+        "safety-limited exactly like every other active test.",
     )
 
     # Authorization gate. Supplying the exact phrase unlocks the active

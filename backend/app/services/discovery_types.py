@@ -49,6 +49,8 @@ class DiscoveredForm:
 class UploadEndpoint:
     url: str
     method: str = "POST"
+    field_name: str = "file"  # the <input type="file"> name, for multipart POST
+    enctype: str = "multipart/form-data"
 
 
 @dataclass

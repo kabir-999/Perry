@@ -264,6 +264,36 @@ export interface DashboardSummary {
   recent_scans: Scan[];
 }
 
+export interface ProjectSeriesPoint {
+  scan_id: string;
+  created_at: string;
+  risk_score: number;
+  findings_count: number;
+}
+
+/** One project's (Target's) risk-score history — a portfolio site's scans
+ *  and this fuzzer project's own scans render as two separate series. */
+export interface ProjectSeries {
+  target_id: string;
+  label: string;
+  points: ProjectSeriesPoint[];
+}
+
+/** One row per distinct website ever scanned (a Target) — the Projects
+ *  list page. The same URL scanned twice is one project with scan_count 2,
+ *  not two projects. */
+export interface ProjectSummary {
+  target_id: string;
+  label: string;
+  base_url: string;
+  scan_count: number;
+  latest_scan_id: string;
+  latest_scan_at: string;
+  latest_status: string;
+  latest_risk_score: number;
+  latest_final_risk: string;
+}
+
 /* ---------------------------------- auth --------------------------------- */
 
 export type UserRole = "developer" | "customer";

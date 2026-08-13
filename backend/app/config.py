@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-only-change-me"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # one week
 
+    # --- Scan activity log encryption + retention ---
+    # Symmetric key passed to Postgres's pgcrypto (pgp_sym_encrypt/decrypt).
+    # Override in .env for anything other than local development — this key
+    # is what makes scan_events.message unreadable to anyone with only
+    # database access, not application access.
+    LOG_ENCRYPTION_KEY: str = "dev-only-change-me-log-key"
+    # Scan activity logs (ScanEvent rows) older than this are purged by a
+    # background sweep — never retained indefinitely.
+    LOG_RETENTION_DAYS: int = 7
+
     # --- Groq / LLM Security Analyst ---
     # NOTE: These are read here only. The LLM analysis service itself is
     # implemented in a later phase. The key must never be hardcoded and
@@ -93,6 +103,10 @@ class Settings(BaseSettings):
     DEEP_SCAN_TIMEOUT_SECONDS: float = 90.0
     CRAWL_MAX_PAGES: int = 25
     CRAWL_MAX_DEPTH: int = 2
+    # How many discovered subdomains get their own independent security
+    # assessment (not just DNS discovery + VHost-probe reuse). Small and
+    # bounded — they all draw from the one shared DEEP_MAX_REQUESTS budget.
+    SUBDOMAIN_ASSESS_LIMIT: int = 5
 
     # Connection pool sizing for the shared httpx.AsyncClient.
     HTTP_MAX_CONNECTIONS: int = 48

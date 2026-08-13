@@ -22,6 +22,13 @@ class TargetCreate(BaseModel):
     method: str = Field(default="dns", pattern="^(dns|http|meta)$")
 
 
+class TargetCredentialSet(BaseModel):
+    # Raw header value, e.g. "Authorization: Bearer <token>" or a cookie
+    # string. Used only for differential authenticated-vs-unauthenticated
+    # testing against this one target; never logged, audited, or returned.
+    auth_header: str | None = Field(default=None, max_length=4096)
+
+
 class TargetRead(BaseModel):
     id: uuid.UUID
     hostname: str
@@ -107,6 +114,27 @@ async def verify_target(target_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     await db.refresh(target)
     return {"verified": result.verified, "detail": result.detail,
             "target": TargetRead.model_validate(target, from_attributes=True).model_dump(mode="json")}
+
+
+@router.post("/{target_id}/credential", status_code=204)
+async def set_target_credential(
+    target_id: uuid.UUID, payload: TargetCredentialSet,
+    db: AsyncSession = Depends(get_db), user: User = Depends(require_developer),
+):
+    """Set or clear the test credential used for authorization-boundary
+    checks against this target. Owner-only. Only honored once the target is
+    VERIFIED (enforced at scan time, not here — a target can be verified
+    after a credential is set). Never audited: the value itself is a
+    credential, not a security event about one."""
+    target = (await db.execute(
+        select(VerifiedTarget).where(VerifiedTarget.id == target_id,
+                                     VerifiedTarget.user_id == user.id)
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    target.auth_header = (payload.auth_header or "").strip() or None
+    await db.commit()
 
 
 @router.get("", response_model=list[TargetRead])

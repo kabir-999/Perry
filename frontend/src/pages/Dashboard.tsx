@@ -9,32 +9,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import RiskCell from "../components/RiskCell";
 import StatCard from "../components/StatCard";
 import { useDashboardSummary } from "../hooks/useDashboardSummary";
 import { SEVERITY_COLOR } from "../theme";
-import type { Scan } from "../types";
-
-const RISK_HEX: Record<string, string> = SEVERITY_COLOR;
-
-/** Groq-authoritative risk for a scan — matches the Scan Detail page.
- *  Shows the level+score only when the AI actually analyzed the scan. */
-function RiskCell({ scan }: { scan: Scan }) {
-  if (!scan.ai_analyzed) {
-    const terminal = ["completed", "failed", "cancelled"].includes(scan.status);
-    return (
-      <span className="text-xs text-[#948972]">{terminal ? "—" : "…"}</span>
-    );
-  }
-  const hex = RISK_HEX[scan.final_risk] ?? "#8a8173";
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs capitalize"
-      style={{ color: hex, borderColor: `${hex}55`, background: `${hex}18` }}
-    >
-      {scan.final_risk || "minimal"} · {scan.risk_score}
-    </span>
-  );
-}
 
 export default function Dashboard() {
   const { summary, loading, error } = useDashboardSummary();
@@ -60,12 +38,20 @@ export default function Dashboard() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Dashboard</h2>
-        <Link
-          to="/scans/new"
-          className="lift rounded-xl bg-[#c2410c] px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-[#9a3412]"
-        >
-          Scan a Website
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            to="/projects"
+            className="lift rounded-xl border border-[#e3d8c4] bg-[#fbf7ef] px-4 py-2 text-sm font-medium text-[#4a4032] shadow-sm hover:bg-[#efe6d5]"
+          >
+            View Projects
+          </Link>
+          <Link
+            to="/scans/new"
+            className="lift rounded-xl bg-[#c2410c] px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-[#9a3412]"
+          >
+            Scan a Website
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -107,7 +93,12 @@ export default function Dashboard() {
       </div>
 
       <div className="rounded-lg border border-[#e3d8c4] bg-[#fbf7ef] p-5">
-        <h3 className="mb-4 text-sm font-medium text-[#4a4032]">Recent Scans</h3>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-[#4a4032]">Recent Scans</h3>
+          <Link to="/projects" className="text-xs text-[#c2410c] hover:underline">
+            See per-project history →
+          </Link>
+        </div>
         {summary.recent_scans.length === 0 ? (
           <p className="text-sm text-[#948972]">No scans yet.</p>
         ) : (

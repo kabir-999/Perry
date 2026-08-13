@@ -5,6 +5,8 @@ import type {
   DiscoveredEndpoint,
   Finding,
   LoginPayload,
+  ProjectSeries,
+  ProjectSummary,
   Scan,
   ScanEvent,
   ScanSnapshot,
@@ -112,7 +114,10 @@ export const scansApi = {
   create: (payload: CreateScanPayload) =>
     client.post<Scan>("/scans", payload).then((r) => r.data),
 
-  list: () => client.get<Scan[]>("/scans").then((r) => r.data),
+  list: (targetId?: string) =>
+    client
+      .get<Scan[]>("/scans", { params: targetId ? { target_id: targetId } : undefined })
+      .then((r) => r.data),
 
   get: (scanId: string) => client.get<Scan>(`/scans/${scanId}`).then((r) => r.data),
 
@@ -173,4 +178,18 @@ export const scansApi = {
 export const dashboardApi = {
   summary: () =>
     client.get<DashboardSummary>("/dashboard/summary").then((r) => r.data),
+
+  /** All projects' risk-score history, or (with `targetId`) just one
+   *  project's — the project detail page's personalized chart. */
+  projectSeries: (targetId?: string) =>
+    client
+      .get<ProjectSeries[]>("/dashboard/projects", {
+        params: targetId ? { target_id: targetId } : undefined,
+      })
+      .then((r) => r.data),
+
+  /** Every distinct website the caller has ever scanned, one row per
+   *  project — the Projects list page. */
+  targets: () =>
+    client.get<ProjectSummary[]>("/dashboard/targets").then((r) => r.data),
 };
