@@ -14,6 +14,7 @@ Attacks split into two kinds, both dispatched here uniformly:
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from app.services.debug_log import debug_log
@@ -61,29 +62,41 @@ async def execute_plan(
     plan: list[PlannedTest], ctx: AttackContext
 ) -> list[TestExecution]:
     """Dispatch each attack's planned subset to its runner. Import the
-    registry lazily to avoid an import cycle (modules import this file)."""
+    registry lazily to avoid an import cycle (modules import this file).
+
+    The 19 attack runners are launched concurrently (not one after another) —
+    each only ever talks to the target through ``ctx.fetcher``, which already
+    enforces its own concurrency cap and request budget, so running the
+    runners themselves concurrently is safe and turns what used to be a
+    strictly serial (and, for a real multi-endpoint site, very slow) pass
+    into one bounded by the fetcher's own limits instead of by attack count.
+    """
     from app.services.attacks.modules import ATTACK_RUNNERS
 
     by_attack: dict[str, list[PlannedTest]] = {}
     for pt in plan:
         by_attack.setdefault(pt.attack, []).append(pt)
 
-    executions: list[TestExecution] = []
-    for attack, planned in by_attack.items():
+    async def run_one(attack: str, planned: list[PlannedTest]) -> list[TestExecution]:
         runner = ATTACK_RUNNERS.get(attack)
         if runner is None:
             # No runner registered — every planned test is NOT_TESTED, never
             # silently a pass.
-            for pt in planned:
-                executions.append(TestExecution(
+            return [
+                TestExecution(
                     test_id=pt.test_id, attack=attack, endpoint_id=pt.endpoint_id,
                     parameter_id=pt.parameter_id, status=TestStatus.NOT_TESTED,
                     evidence="No runner registered for this attack.",
-                ))
-            continue
+                )
+                for pt in planned
+            ]
         debug_log("TEST", f"{attack}: executing {len(planned)} planned test(s)")
-        results = await runner(planned, ctx)
-        executions.extend(results)
+        return await runner(planned, ctx)
+
+    results = await asyncio.gather(
+        *(run_one(attack, planned) for attack, planned in by_attack.items())
+    )
+    executions: list[TestExecution] = [e for group in results for e in group]
 
     for e in executions:
         debug_log("RESULT", f"{e.attack} {e.endpoint_id}/{e.parameter_id or '-'} -> {e.status}")
