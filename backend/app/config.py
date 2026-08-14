@@ -96,11 +96,19 @@ class Settings(BaseSettings):
     # redirect loop degrades to a finding instead of failing the scan.
     REDIRECT_MAX_DEPTH: int = 5
 
-    # --- Stage 2: Deep Scan (tuned for low latency) ---
+    # --- Stage 2: Deep Scan ---
     DEEP_CONCURRENCY: int = 24
-    DEEP_MAX_REQUESTS: int = 300
+    # Request budget must cover the whole attack surface: with 19 attack
+    # modules each probing every eligible parameter, a modest site is easily
+    # 1,000-2,000 requests. Set too low (the old 300) it starved later attacks
+    # so eligible parameters showed "tested 0". The rate limit + scan timeout
+    # remain the real governors; this ceiling is sized so it is not the
+    # binding constraint for typical targets. Genuinely huge surfaces that
+    # still exceed it now report the untested remainder as NOT_TESTED
+    # (honestly), never a false NOT_VULNERABLE.
+    DEEP_MAX_REQUESTS: int = 2500
     DEEP_REQUEST_TIMEOUT_SECONDS: float = 6.0
-    DEEP_SCAN_TIMEOUT_SECONDS: float = 90.0
+    DEEP_SCAN_TIMEOUT_SECONDS: float = 240.0
     CRAWL_MAX_PAGES: int = 25
     CRAWL_MAX_DEPTH: int = 2
     # How many discovered subdomains get their own independent security

@@ -1,7 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
-import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import NewScan from "./pages/NewScan";
 import ProjectDetail from "./pages/ProjectDetail";
@@ -50,7 +49,7 @@ function Routing() {
           </Guard>
         }
       >
-        <Route index element={<Dashboard />} />
+        <Route index element={<Navigate to="/projects" replace />} />
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:targetId" element={<ProjectDetail />} />
         <Route path="scans/new" element={<NewScan />} />

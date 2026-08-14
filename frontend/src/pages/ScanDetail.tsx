@@ -285,10 +285,10 @@ export default function ScanDetail() {
             </button>
           )}
           <Link
-            to="/"
+            to="/projects"
             className="rounded-lg px-3 py-1.5 text-sm text-[#6f6552] transition-colors hover:text-[#3a3122]"
           >
-            Dashboard
+            Projects
           </Link>
         </div>
       </div>

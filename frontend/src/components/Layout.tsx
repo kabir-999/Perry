@@ -32,19 +32,6 @@ export default function Layout() {
           </Link>
           <nav className="flex items-center gap-1">
             <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? "text-[#c2410c]"
-                    : "text-[#6f6552] hover:text-[#3a3122]"
-                }`
-              }
-            >
-              Dashboard
-            </NavLink>
-            <NavLink
               to="/projects"
               className={({ isActive }) =>
                 `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
