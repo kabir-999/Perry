@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Link, useParams } from "react-router-dom";
 import { scansApi } from "../services/api";
 import { SEVERITY_COLOR } from "../theme";
@@ -657,7 +664,7 @@ function Panel({
   accent,
 }: {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
   accent?: string;
 }) {
   return (
@@ -845,44 +852,44 @@ function DependencyRow({ sf }: { sf: SourceFinding }) {
 }
 
 function TestRow({ test }: { test: TestResult }) {
-  if (test.status === "not_authorized") {
-    return (
-      <div className="flex items-center justify-between rounded-lg border border-[#e8d09a] bg-[#fdf3e3] px-3 py-2">
-        <span className="text-sm font-medium text-[#3a3122]">{test.name}</span>
-        <span
-          className="text-xs font-semibold text-[#b45309]"
-          title="Active tests send crafted payloads, so they only run on a site you have confirmed you own."
-        >
-          Not run — needs authorization
-        </span>
-      </div>
-    );
-  }
-  if (test.status === "not_applicable") {
-    return (
-      <div className="flex items-center justify-between rounded-lg border border-[#ece3d3] bg-[#f4efe6] px-3 py-2 opacity-70">
-        <span className="text-sm text-[#948972]">{test.name}</span>
-        <span className="text-xs text-[#b0a48c]">N/A</span>
-      </div>
-    );
-  }
-  if (test.status === "pass") {
-    return (
-      <div className="flex items-center justify-between rounded-lg border border-[#a7d3bf] bg-[#e7f4ec] px-3 py-2">
-        <span className="text-sm font-medium text-[#3a3122]">{test.name}</span>
-        <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0f7a52]">
-          ✓ Pass
-        </span>
-      </div>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const log = test.log;
+  const canExpand = !!log;
   const color = SEV[test.severity] ?? "#78716c";
-  return (
-    <div
-      className="flex items-center justify-between rounded-lg border px-3 py-2"
-      style={{ borderColor: `${color}55`, background: `${color}12` }}
-    >
-      <span className="text-sm font-medium text-[#3a3122]">{test.name}</span>
+
+  // Presentation per status — same colours as before, now inside an
+  // expandable card.
+  let wrapClass = "border-[#a7d3bf] bg-[#e7f4ec]";
+  let wrapStyle: CSSProperties | undefined;
+  let nameClass = "text-sm font-medium text-[#3a3122]";
+  let badge: ReactNode;
+
+  if (test.status === "not_authorized") {
+    wrapClass = "border-[#e8d09a] bg-[#fdf3e3]";
+    badge = (
+      <span
+        className="text-xs font-semibold text-[#b45309]"
+        title="Active tests send crafted payloads, so they only run on a site you have confirmed you own."
+      >
+        Not run — needs authorization
+      </span>
+    );
+  } else if (test.status === "not_applicable") {
+    wrapClass = "border-[#ece3d3] bg-[#f4efe6] opacity-70";
+    nameClass = "text-sm text-[#948972]";
+    badge = <span className="text-xs text-[#b0a48c]">N/A</span>;
+  } else if (test.status === "inconclusive") {
+    wrapClass = "border-[#ddd6c8] bg-[#efece4]";
+    badge = <span className="text-xs font-semibold text-[#948972]">Inconclusive</span>;
+  } else if (test.status === "pass") {
+    badge = (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0f7a52]">
+        ✓ Pass
+      </span>
+    );
+  } else {
+    wrapStyle = { borderColor: `${color}55`, background: `${color}12` };
+    badge = (
       <span
         className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
         style={{ background: `${color}22`, color }}
@@ -890,6 +897,55 @@ function TestRow({ test }: { test: TestResult }) {
         {test.severity}
         {test.count > 1 && <span className="opacity-80">×{test.count}</span>}
       </span>
+    );
+  }
+
+  return (
+    <div
+      className={`rounded-lg border ${wrapStyle ? "" : wrapClass}`}
+      style={wrapStyle}
+    >
+      <button
+        type="button"
+        disabled={!canExpand}
+        onClick={() => setOpen((o) => !o)}
+        className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left ${
+          canExpand ? "cursor-pointer" : "cursor-default"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {canExpand && (
+            <span className="shrink-0 text-xs text-[#b0a48c]">
+              {open ? "▾" : "▸"}
+            </span>
+          )}
+          <span className={`truncate ${nameClass}`}>{test.name}</span>
+        </span>
+        {badge}
+      </button>
+      {open && log && (
+        <div className="border-t border-black/5 px-3 pb-3 pt-2">
+          <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wide text-[#948972]">
+            <span>
+              test_log · {log.test_type} · {log.finding_count} finding
+              {log.finding_count === 1 ? "" : "s"} · {log.probe_requests} probe req
+            </span>
+            <button
+              type="button"
+              className="rounded border border-[#d9cdb6] px-2 py-0.5 text-[10px] normal-case text-[#7a6f57] hover:text-[#3a3122]"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigator.clipboard?.writeText(JSON.stringify(log, null, 2));
+              }}
+            >
+              Copy JSON
+            </button>
+          </div>
+          <pre className="max-h-96 overflow-auto rounded-md border border-[#d9cdb6] bg-[#26221b] px-3 py-2.5 text-xs leading-relaxed text-[#f0e9dc]">
+            {JSON.stringify(log, null, 2)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

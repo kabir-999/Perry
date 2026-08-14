@@ -24,6 +24,119 @@ from app.services.http_client import Fetcher
 from app.services.response_analyzer import AnalyzedResponse, analyze, jaccard
 
 # ---------------------------------------------------------------------------
+# ProbeRecorder — a log of every payload actually sent, whatever the result
+# ---------------------------------------------------------------------------
+# A finding is only produced when an attack succeeds, so the fact that a test
+# passed (came back "not vulnerable") leaves no trace on its own. The recorder
+# captures each attempt — success or negative — so the report can show what was
+# tried and what happened, not just the hits. It is optional: when no recorder
+# is passed the engine behaves exactly as before.
+
+# Human-readable description of the signal each active test looks for, keyed by
+# the test's dedup prefix. Shown in the probe log so a negative result reads as
+# "this specific signal was checked and not seen", not just "nothing found".
+_PROBE_SIGNAL = {
+    "reflected_xss": "marker '<z>' reflected unescaped in the response body",
+    "sqli": "database error signature (MySQL/PostgreSQL/Oracle/SQLite/MSSQL) not in baseline",
+    "path_traversal": "/etc/passwd content ('root:...:0:0:') in the response",
+    "cmd_injection": "OS command output ('uid=...gid=...') not in baseline",
+    "open_redirect": "Location header redirects to the external marker host",
+    "hpp": "duplicated parameter changed the response and the second value reflected",
+}
+
+# Short, human label per attack for the `finding` sentence in each probe entry.
+_ATTACK_LABEL = {
+    "reflected_xss": "reflected XSS",
+    "sqli": "SQL injection",
+    "path_traversal": "path traversal",
+    "cmd_injection": "OS command injection",
+    "open_redirect": "open redirect",
+    "hpp": "HTTP parameter pollution",
+}
+
+# Stable, machine-readable case names per (attack, payload). Kept as string
+# literals (not references to payload constants defined lower in this file) so
+# the mapping is import-order independent. Unknown payloads fall back to a
+# deterministic `<attack>_probe_<seq>` name.
+_CASE_NAME = {
+    ("cmd_injection", ";id"): "cmd_injection_semicolon",
+    ("cmd_injection", "|id"): "cmd_injection_pipe",
+    ("cmd_injection", "`id`"): "cmd_injection_backtick",
+    ("cmd_injection", "$(id)"): "cmd_injection_command_substitution",
+    ("sqli", "'"): "sqli_single_quote",
+    ("sqli", "1'\""): "sqli_quote_pair",
+    ("sqli", "1) OR ('1'='1"): "sqli_boolean_or",
+    ("reflected_xss", "wf7xq<z>'\""): "xss_reflected_marker",
+    ("path_traversal", "../../../../../../etc/passwd"): "path_traversal_etc_passwd",
+    ("open_redirect", "https://external.invalid/wf-redirect"): "open_redirect_external_marker",
+}
+
+
+def _case_name(dedup_prefix: str, payload: str, seq: int) -> str:
+    name = _CASE_NAME.get((dedup_prefix, payload))
+    if name:
+        return name
+    if dedup_prefix == "hpp":
+        return "hpp_duplicate_parameter"
+    if dedup_prefix == "path_traversal":
+        return f"path_traversal_encoded_{seq}"
+    return f"{dedup_prefix}_probe_{seq}"
+
+
+@dataclass
+class ProbeRecorder:
+    """Append-only log of active probes. Records the payload, where it was
+    injected, the response status/size, and the verdict — for every attempt."""
+
+    entries: list[dict] = field(default_factory=list)
+    _seq: int = 0
+
+    def record(self, *, dedup_prefix: str, target: "ParamTarget", payload: str,
+               response, evidence, note: str = "") -> None:
+        self._seq += 1
+        ok = bool(response is not None and getattr(response, "ok", False))
+        status = getattr(response, "status_code", None) if ok else None
+        if ok:
+            size = getattr(response, "body_bytes", None)
+            if size is None:
+                size = len(getattr(response, "text", "") or "")
+        else:
+            size = 0
+        signal = _PROBE_SIGNAL.get(dedup_prefix, note or "test-specific signal")
+        label = _ATTACK_LABEL.get(dedup_prefix, dedup_prefix)
+        if evidence:
+            verdict = "vulnerable"
+            finding = f"{label} confirmed — {signal.split(' not in baseline')[0]} was observed"
+        elif not ok:
+            verdict = "error"
+            finding = f"Request failed; {label} could not be evaluated"
+        else:
+            verdict = "not_vulnerable"
+            finding = f"No {label} evidence; {signal} was not observed"
+        self.entries.append({
+            "seq": self._seq,
+            # Stable, machine-readable case name (e.g. cmd_injection_pipe).
+            "name": _case_name(dedup_prefix, payload or "", self._seq),
+            "test": dedup_prefix,
+            "location": target.location,
+            "parameter": target.name,
+            "method": target.method,
+            "url": target.url,
+            # The exact payload sent — kept visible so a finding is reproducible.
+            "payload": (payload or "")[:120],
+            "response_status": status,
+            "response_bytes": size,
+            # What the detector expected to see, vs whether it saw it.
+            "signal_checked": signal,
+            "signal_matched": bool(evidence),
+            "verdict": verdict,
+            # Concrete, evidence-backed sentence — never "possible vulnerability".
+            "finding": finding,
+            "evidence": (str(evidence)[:200] if evidence else None),
+        })
+
+
+# ---------------------------------------------------------------------------
 # ParamTarget — a location-agnostic view of one testable parameter
 # ---------------------------------------------------------------------------
 
@@ -257,6 +370,7 @@ async def run_active_tests(
     params: list[DiscoveredParam],
     *,
     max_targets: int = 12,
+    recorder: "ProbeRecorder | None" = None,
 ) -> list[FindingCandidate]:
     # Build unique targets across all locations.
     targets: dict[str, ParamTarget] = {}
@@ -274,13 +388,15 @@ async def run_active_tests(
 
     findings: list[FindingCandidate] = []
     for target in ranked:
-        findings += await _test_target(fetcher, target)
-        findings += await _hpp_test(fetcher, target)
-        findings += await _open_redirect(fetcher, target)
+        findings += await _test_target(fetcher, target, recorder=recorder)
+        findings += await _hpp_test(fetcher, target, recorder=recorder)
+        findings += await _open_redirect(fetcher, target, recorder=recorder)
     return findings
 
 
-async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandidate]:
+async def _test_target(
+    fetcher: Fetcher, target: ParamTarget, *, recorder: "ProbeRecorder | None" = None
+) -> list[FindingCandidate]:
     baseline_res = await _send(fetcher, target, target.example)
     if not baseline_res.ok:
         return []
@@ -298,9 +414,12 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
         hit = False
         for payload in test.payloads[:4]:
             res = await _send(fetcher, target, payload)
+            evidence = test.detect(payload, base_raw, res.text) if res.ok else None
+            if recorder is not None:
+                recorder.record(dedup_prefix=test.dedup_prefix, target=target,
+                                payload=payload, response=res, evidence=evidence)
             if not res.ok:
                 continue
-            evidence = test.detect(payload, base_raw, res.text)
             if evidence:
                 out.append(
                     _finding(
@@ -323,9 +442,12 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
                         variants.append(v)
             for payload in variants[:4]:
                 res = await _send(fetcher, target, payload)
+                evidence = test.detect(payload, base_raw, res.text) if res.ok else None
+                if recorder is not None:
+                    recorder.record(dedup_prefix=test.dedup_prefix, target=target,
+                                    payload=payload, response=res, evidence=evidence)
                 if not res.ok:
                     continue
-                evidence = test.detect(payload, base_raw, res.text)
                 if evidence:
                     out.append(
                         _finding(
@@ -336,15 +458,20 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
     return out
 
 
-async def _open_redirect(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandidate]:
+async def _open_redirect(
+    fetcher: Fetcher, target: ParamTarget, *, recorder: "ProbeRecorder | None" = None
+) -> list[FindingCandidate]:
     if target.location != "query" or target.name.lower() not in _REDIRECTISH:
         return []
     marker = "https://external.invalid/wf-redirect"
     res = await _send(fetcher, target, marker)
-    if not res.ok or res.status_code not in (301, 302, 303, 307, 308):
-        return []
-    location = res.headers.get("location", "")
-    if "external.invalid" in location:
+    is_redirect = res.ok and res.status_code in (301, 302, 303, 307, 308)
+    location = res.headers.get("location", "") if res.ok else ""
+    evidence = f"Location: {location}" if (is_redirect and "external.invalid" in location) else None
+    if recorder is not None:
+        recorder.record(dedup_prefix="open_redirect", target=target, payload=marker,
+                        response=res, evidence=evidence)
+    if evidence:
         return [
             FindingCandidate(
                 title="Open redirect (query)",
@@ -387,7 +514,9 @@ def _finding(target, test, payload, evidence, confidence, base, analyzed):
     )
 
 
-async def _hpp_test(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandidate]:
+async def _hpp_test(
+    fetcher: Fetcher, target: ParamTarget, *, recorder: "ProbeRecorder | None" = None
+) -> list[FindingCandidate]:
     """HTTP Parameter Pollution: compare single vs duplicate parameter. Only
     query parameters; conservative reporting."""
     if target.location != "query":
@@ -410,7 +539,13 @@ async def _hpp_test(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandid
     # Only flag when the duplicate meaningfully changes behaviour AND one of
     # the injected values is reflected (a security-relevant signal).
     reflects_b = "WFB" in dup.text
-    if meaningfully_different(a, b) and reflects_b:
+    hit = meaningfully_different(a, b) and reflects_b
+    if recorder is not None:
+        recorder.record(
+            dedup_prefix="hpp", target=target,
+            payload=f"{target.name}=WFA&{target.name}=WFB", response=dup,
+            evidence=("duplicate changed response; second value reflected" if hit else None))
+    if hit:
         return [
             FindingCandidate(
                 title="HTTP parameter pollution",

@@ -49,10 +49,53 @@ export interface Scan {
 /** One row of the full security-test matrix (every test + its outcome). */
 export interface TestResult {
   name: string;
-  status: "pass" | "finding" | "not_applicable" | "not_authorized";
+  status:
+    | "pass"
+    | "finding"
+    | "not_applicable"
+    | "not_authorized"
+    | "inconclusive";
   severity: string;
   count: number;
   detail: string;
+  /** Structured per-test log: findings + every probe attempt (whatever the
+   *  result). Present on completed scans; expanded in the UI as JSON. */
+  log?: TestLog;
+}
+
+/** One probe the active engine actually sent, with its verdict. */
+export interface ProbeLogEntry {
+  seq: number;
+  /** Stable machine-readable case name, e.g. "cmd_injection_pipe". */
+  name: string;
+  test: string;
+  location: string;
+  parameter: string;
+  method: string;
+  url: string;
+  payload: string;
+  response_status: number | null;
+  response_bytes: number;
+  signal_checked: string;
+  signal_matched: boolean;
+  verdict: "vulnerable" | "not_vulnerable" | "error";
+  /** Concrete evidence-backed sentence describing the outcome. */
+  finding: string;
+  evidence: string | null;
+}
+
+/** Structured log attached to each security test. */
+export interface TestLog {
+  test_id: string;
+  name: string;
+  test_type: "passive" | "active" | "api";
+  status: string;
+  severity: string;
+  finding_count: number;
+  probe_requests: number;
+  detail: string;
+  findings: Record<string, unknown>[];
+  probe_log: ProbeLogEntry[];
 }
 
 /** A Groq-analyzed risk factor (authoritative severity/confidence). */
