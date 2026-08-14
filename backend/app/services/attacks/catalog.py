@@ -22,7 +22,16 @@ FILE_UPLOAD = "file_upload"
 VHOST_ISOLATION = "vhost_isolation"
 SUBDOMAIN_TAKEOVER = "subdomain_takeover"
 
-# Ordered (MUST first, then ADVANCED) — the order the report renders.
+# --- Extended attacks (merged from the phase-2 detector suite) ---
+COMMAND_INJECTION = "command_injection"
+NOSQL_INJECTION = "nosql_injection"
+SSRF = "ssrf"
+SSTI = "ssti"
+CSRF = "csrf"
+CRLF = "crlf_injection"
+STORED_XSS = "stored_xss"
+
+# Ordered (MUST first, then ADVANCED, then EXTENDED) — the order the report renders.
 MUST_ATTACKS = [
     SQL_INJECTION, XSS, PATH_TRAVERSAL, OPEN_REDIRECT,
     SECURITY_MISCONFIGURATION, SENSITIVE_INFO_DISCLOSURE, AUTH,
@@ -30,7 +39,10 @@ MUST_ATTACKS = [
 ADVANCED_ATTACKS = [
     API_AUTHENTICATION, HPP, FILE_UPLOAD, VHOST_ISOLATION, SUBDOMAIN_TAKEOVER,
 ]
-ALL_ATTACKS = MUST_ATTACKS + ADVANCED_ATTACKS
+EXTENDED_ATTACKS = [
+    COMMAND_INJECTION, NOSQL_INJECTION, SSRF, SSTI, CSRF, CRLF, STORED_XSS,
+]
+ALL_ATTACKS = MUST_ATTACKS + ADVANCED_ATTACKS + EXTENDED_ATTACKS
 
 DISPLAY_NAME = {
     SQL_INJECTION: "SQL Injection",
@@ -45,6 +57,13 @@ DISPLAY_NAME = {
     FILE_UPLOAD: "File Upload",
     VHOST_ISOLATION: "VHost Isolation",
     SUBDOMAIN_TAKEOVER: "Subdomain Takeover",
+    COMMAND_INJECTION: "Command Injection",
+    NOSQL_INJECTION: "NoSQL Injection",
+    SSRF: "Server-Side Request Forgery (SSRF)",
+    SSTI: "Server-Side Template Injection (SSTI)",
+    CSRF: "Cross-Site Request Forgery (CSRF)",
+    CRLF: "CRLF Injection",
+    STORED_XSS: "Stored XSS",
 }
 
 # Which attacks require the scanner to have authorized credentials to run the
