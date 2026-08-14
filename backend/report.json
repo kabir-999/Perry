@@ -1,117 +1,56 @@
 {
-  "files_analyzed": 38,
+  "files_analyzed": 189,
   "counts": {
-    "info": 1,
-    "low": 2,
+    "info": 2,
+    "low": 0,
     "medium": 0,
     "high": 0,
     "critical": 0
   },
   "risk": {
-    "score": 6,
+    "score": 0,
     "severity": "MINIMAL",
-    "methodology": "Sentinel Risk Model v1",
-    "findings_considered": 3,
-    "third_party_excluded": 0,
     "contributors": [
       {
-        "finding_id": "repo_dep|mongoose|GHSA-664h-wqgq-64gw",
-        "title": "Vulnerable Dependency Present: mongoose 7.8.7",
-        "type": "SECURITY_HARDENING",
-        "confidence": 0.6,
-        "affected_urls": 1,
-        "exposure_multiplier": 1.0,
-        "detection_status": "DETECTED",
-        "hardening": {
-          "model": "Sentinel Hardening Model v1",
-          "rule": "default",
-          "base_impact": 10.0,
-          "scale": "0-100 Sentinel hardening weight (not a CVSS score)",
-          "means": "A protective control is absent. No attack was performed or observed against this finding."
-        },
-        "contribution": 4.8,
-        "contribution_note": "Sentinel aggregation contribution \u2014 not a CVSS value.",
-        "applied_points": 5.2
-      },
-      {
-        "finding_id": "repo_dep|nodemailer|GHSA-268h-hp4c-crq3",
-        "title": "Vulnerable Dependency Present: nodemailer 8.0.2",
-        "type": "SECURITY_HARDENING",
-        "confidence": 0.6,
-        "affected_urls": 1,
-        "exposure_multiplier": 1.0,
-        "detection_status": "DETECTED",
-        "hardening": {
-          "model": "Sentinel Hardening Model v1",
-          "rule": "default",
-          "base_impact": 10.0,
-          "scale": "0-100 Sentinel hardening weight (not a CVSS score)",
-          "means": "A protective control is absent. No attack was performed or observed against this finding."
-        },
-        "contribution": 4.8,
-        "contribution_note": "Sentinel aggregation contribution \u2014 not a CVSS value.",
-        "applied_points": 0.8
-      },
-      {
-        "finding_id": "hygiene_env_secret|backend/.env|3",
+        "finding_id": "hygiene_env_secret|backend/.env|4",
         "title": "Env Secret in backend/.env",
-        "type": "INFORMATIONAL",
-        "confidence": 0.35,
-        "affected_urls": 1,
-        "exposure_multiplier": 1.0,
-        "detection_status": "DETECTED",
-        "informational": true,
-        "contribution": 0.0,
-        "contribution_note": "Sentinel aggregation contribution \u2014 not a CVSS value.",
-        "applied_points": 0.0
+        "contribution": 34.2
+      },
+      {
+        "finding_id": "hygiene_env_secret|backend/.env|8",
+        "title": "Env Secret in backend/.env",
+        "contribution": 34.2
       }
-    ],
-    "aggregation": {
-      "base": 4.8,
-      "base_from": "Vulnerable Dependency Present: mongoose 7.8.7",
-      "added_by_others": 0.8,
-      "other_findings": 2,
-      "formula": "score = strongest finding + a capped share of the remaining headroom (35% max), so one severe finding dominates and volume alone cannot inflate the total",
-      "note": "applied_points across contributors sum to the score."
-    },
-    "explanation": "4.8 of 6 comes from 'Vulnerable Dependency Present: mongoose 7.8.7'; the other 2 finding(s) add 0.8."
+    ]
   },
   "findings": [
     {
-      "dedup_key": "hygiene_env_secret|backend/.env|3",
+      "dedup_key": "hygiene_env_secret|backend/.env|4",
       "title": "Env Secret in backend/.env",
       "severity": "info",
       "confidence": "uncertain",
       "category": "information_exposure",
       "category_display": "Secret Hygiene",
-      "location": "backend/.env:3",
-      "evidence": "EMAIL_PASSWORD=[REDACTED]",
+      "location": "backend/.env:4",
+      "evidence": "GROQ_API_KEY=[REDACTED]",
       "remediation": "",
-      "secret_type": "EMAIL_PASSWORD",
+      "secret_type": "GROQ_API_KEY",
       "status": "IGNORED_NOT_EXPOSED",
       "note": "File is already covered by .gitignore. No repository exposure was detected. Reported for hygiene purposes only."
     },
     {
-      "dedup_key": "repo_dep|mongoose|GHSA-664h-wqgq-64gw",
-      "title": "Vulnerable Dependency Present: mongoose 7.8.7",
-      "severity": "low",
-      "confidence": "potential",
-      "category": "dependency_vulnerability",
-      "category_display": "Dependency Vulnerability",
-      "location": "",
-      "evidence": "Package: mongoose 7.8.7 (npm)\nDependency type: direct production\nAdvisory: GHSA-664h-wqgq-64gw\nVulnerable range: >=7.0.0, <7.8.10\nPatched version: 7.8.10\nPackage imported: yes\nVulnerable functionality named by advisory: $parentSchemaDocArray, Object.prototype, $fullPath, prototype\nVulnerable functionality used: no\nReachable from attacker-controlled input: no path found",
-      "remediation": "Upgrade mongoose from 7.8.7 to 7.8.10."
-    },
-    {
-      "dedup_key": "repo_dep|nodemailer|GHSA-268h-hp4c-crq3",
-      "title": "Vulnerable Dependency Present: nodemailer 8.0.2",
-      "severity": "low",
-      "confidence": "potential",
-      "category": "dependency_vulnerability",
-      "category_display": "Dependency Vulnerability",
-      "location": "",
-      "evidence": "Package: nodemailer 8.0.2 (npm)\nDependency type: direct production\nAdvisory: GHSA-268h-hp4c-crq3\nVulnerable range: >=0, <8.0.9\nPatched version: 8.0.9\nPackage imported: yes\nVulnerable functionality named by advisory: list.unsubscribe.comment, list.subscribe.comment, list.archive.comment, mimeFuncs.foldLines\nVulnerable functionality used: no\nReachable from attacker-controlled input: no path found",
-      "remediation": "Upgrade nodemailer from 8.0.2 to 8.0.9."
+      "dedup_key": "hygiene_env_secret|backend/.env|8",
+      "title": "Env Secret in backend/.env",
+      "severity": "info",
+      "confidence": "uncertain",
+      "category": "information_exposure",
+      "category_display": "Secret Hygiene",
+      "location": "backend/.env:8",
+      "evidence": "DATABASE_URL=[REDACTED]",
+      "remediation": "",
+      "secret_type": "DATABASE_URL",
+      "status": "IGNORED_NOT_EXPOSED",
+      "note": "File is already covered by .gitignore. No repository exposure was detected. Reported for hygiene purposes only."
     }
   ],
   "gates": {
@@ -123,11 +62,11 @@
     "risk": {
       "maximum": null,
       "status": "PASSED",
-      "score": 6
+      "score": 0
     },
     "overall": "PASSED"
   },
-  "risk_score": 6,
+  "risk_score": 0,
   "risk_level": "MINIMAL",
   "exit_code": 0
 }

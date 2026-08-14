@@ -74,6 +74,14 @@ def _exec(pt: PlannedTest, status: str, **kw) -> TestExecution:
     )
 
 
+def _budget_gone(ctx) -> bool:
+    """True once the shared request budget is exhausted. A probe that can't
+    send its request must NEVER be reported NOT_VULNERABLE — it wasn't tested.
+    Every runner checks this so 'eligible but not tested' shows honestly as
+    NOT_TESTED, not a false clean result."""
+    return bool(getattr(ctx.fetcher, "budget_exhausted", False))
+
+
 async def _probe_param(ctx, ep, pm, payloads, detect, *, encoders=None):
     """Baseline → payloads → optional encoder escalation. Returns
     (evidence, positive_payload, baseline_analyzed, test_analyzed) or Nones."""
@@ -142,12 +150,20 @@ async def run_sql_injection(plan, ctx: AttackContext):
         if ctx.passive_only:
             out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — active probe not sent"))
             continue
+        if _budget_gone(ctx):
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted before this target was probed"))
+            continue
         if pm.location == "path":
             ev, payload, base, test = await _probe_path(ctx, ep, _SQLI_PAYLOADS, _sqli_detect)
         else:
             ev, payload, base, test, ran = await _probe_param(ctx, ep, pm, _SQLI_PAYLOADS, _sqli_detect)
             if not ran:
-                out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence="baseline request failed"))
+                out.append(_exec(
+                    pt,
+                    TestStatus.NOT_TESTED if _budget_gone(ctx) else TestStatus.INCONCLUSIVE,
+                    evidence=("request budget exhausted; parameter not probed"
+                              if _budget_gone(ctx) else "baseline request failed"),
+                ))
                 continue
         if ev:
             f = _finding(C.SQL_INJECTION, ep, pm, "SQL Injection", "high", ev, payload, base, test,
@@ -190,7 +206,12 @@ async def run_xss(plan, ctx: AttackContext):
             continue
         ev, payload, base, test, ran = await _probe_param(ctx, ep, pm, [_XSS_MARKER], _xss_detect)
         if not ran:
-            out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence="baseline request failed"))
+            out.append(_exec(
+                pt,
+                TestStatus.NOT_TESTED if _budget_gone(ctx) else TestStatus.INCONCLUSIVE,
+                evidence=("request budget exhausted; parameter not probed"
+                          if _budget_gone(ctx) else "baseline request failed"),
+            ))
             continue
         if not ev and pm.location == "query":
             # DOM-based reflection the raw-HTML diff can't see (browser render).
@@ -230,7 +251,12 @@ async def run_path_traversal(plan, ctx: AttackContext):
             ev, payload, base, test, ran = await _probe_param(
                 ctx, ep, pm, _TRAV_PAYLOADS, _trav_detect, encoders=[encode_variants])
         if not ran:
-            out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence="baseline request failed"))
+            out.append(_exec(
+                pt,
+                TestStatus.NOT_TESTED if _budget_gone(ctx) else TestStatus.INCONCLUSIVE,
+                evidence=("request budget exhausted; parameter not probed"
+                          if _budget_gone(ctx) else "baseline request failed"),
+            ))
             continue
         if ev:
             f = _finding(C.PATH_TRAVERSAL, ep, pm, "Path Traversal", "high", ev, payload, base, test,
@@ -281,7 +307,14 @@ async def run_hpp(plan, ctx: AttackContext):
         if ctx.passive_only:
             out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
             continue
+        if _budget_gone(ctx):
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted before this target was probed"))
+            continue
+        before = ctx.fetcher.requests_made
         findings = await _hpp_test(ctx.fetcher, _param_target(ep, pm))
+        if not findings and (ctx.fetcher.requests_made == before or _budget_gone(ctx)):
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted; parameter not probed"))
+            continue
         if findings:
             # A response difference alone is OBSERVATION/HARDENING, not a
             # vulnerability, unless a security consequence is shown — the
@@ -309,6 +342,9 @@ async def run_file_upload(plan, ctx: AttackContext):
         if ctx.passive_only:
             out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — upload not probed"))
             continue
+        if _budget_gone(ctx):
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted before this target was probed"))
+            continue
         findings = await security_checks.check_upload_endpoint(ctx.fetcher, upload)
         if findings:
             out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
@@ -330,6 +366,9 @@ async def run_api_authentication(plan, ctx: AttackContext):
     finding_by_path = {}
     for f in findings:
         finding_by_path.setdefault(urlsplit(f.url).path, f)
+    # If the whole API-security sweep couldn't run (budget already gone), no
+    # endpoint was actually tested — don't report any of them NOT_VULNERABLE.
+    swept = bool(api_urls) and not (not findings and _budget_gone(ctx))
     out = []
     for pt in plan:
         ep = ctx.inventory.endpoint(pt.endpoint_id)
@@ -340,6 +379,8 @@ async def run_api_authentication(plan, ctx: AttackContext):
         if f is not None:
             out.append(_exec(pt, TestStatus.VULNERABLE, confidence=f.confidence,
                              evidence=f.evidence, finding=f))
+        elif not swept:
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted; API endpoint not probed"))
         else:
             out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                              evidence="API endpoint enforces auth or returned no sensitive data unauthenticated."))
@@ -472,7 +513,12 @@ async def run_command_injection(plan, ctx: AttackContext):
             continue
         ev, payload, base, test, ran = await _probe_param(ctx, ep, pm, _CMD_PAYLOADS, _cmd_detect)
         if not ran:
-            out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence="baseline request failed"))
+            out.append(_exec(
+                pt,
+                TestStatus.NOT_TESTED if _budget_gone(ctx) else TestStatus.INCONCLUSIVE,
+                evidence=("request budget exhausted; parameter not probed"
+                          if _budget_gone(ctx) else "baseline request failed"),
+            ))
             continue
         if ev:
             f = _finding(C.COMMAND_INJECTION, ep, pm, "Command Injection", "critical", ev, payload, base, test,
@@ -497,6 +543,10 @@ def _phase2_param_runner(attack, detector, **kw):
             if ctx.passive_only:
                 out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
                 continue
+            if _budget_gone(ctx):
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted before this target was probed"))
+                continue
+            before = ctx.fetcher.requests_made
             try:
                 extra = dict(kw)
                 if attack == C.SSRF:
@@ -508,6 +558,10 @@ def _phase2_param_runner(attack, detector, **kw):
             if findings:
                 out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
                                  evidence=findings[0].evidence, finding=findings[0]))
+            elif ctx.fetcher.requests_made == before or _budget_gone(ctx):
+                # No probe actually landed (budget ran out mid-detector) — never
+                # report a clean result for something that wasn't tested.
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted; parameter not fully probed"))
             else:
                 out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                                  evidence="No evidence for this attack on the tested parameter."))
@@ -525,6 +579,10 @@ async def run_nosql_injection(plan, ctx: AttackContext):
         if ctx.passive_only:
             out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
             continue
+        if _budget_gone(ctx):
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted before this target was probed"))
+            continue
+        before = ctx.fetcher.requests_made
         try:
             findings = await phase2_checks.check_nosql_injection(ctx.fetcher, ep.url)
         except Exception as exc:
@@ -533,6 +591,8 @@ async def run_nosql_injection(plan, ctx: AttackContext):
         if findings:
             out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
                              evidence=findings[0].evidence, finding=findings[0]))
+        elif ctx.fetcher.requests_made == before or _budget_gone(ctx):
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted; endpoint not probed"))
         else:
             out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                              evidence="Operator-injection login did not bypass authentication."))
@@ -551,6 +611,10 @@ def _phase2_endpoint_runner(attack, detector):
             if ctx.passive_only:
                 out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
                 continue
+            if _budget_gone(ctx):
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted before this target was probed"))
+                continue
+            before = ctx.fetcher.requests_made
             try:
                 if attack == C.STORED_XSS:
                     findings = await detector(ctx.fetcher, ep.url, ep.url)
@@ -562,6 +626,8 @@ def _phase2_endpoint_runner(attack, detector):
             if findings:
                 out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
                                  evidence=findings[0].evidence, finding=findings[0]))
+            elif ctx.fetcher.requests_made == before or _budget_gone(ctx):
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted; endpoint not probed"))
             else:
                 out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                                  evidence="No evidence for this attack on the tested endpoint."))
