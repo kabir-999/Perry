@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from app.services.attacks import catalog as C
 from app.services.debug_log import debug_log
-from app.services.inventory import API, REDIRECT, UPLOAD, AttackSurfaceInventory, Endpoint, Parameter
+from app.services.inventory import API, FORM, REDIRECT, UPLOAD, AttackSurfaceInventory, Endpoint, Parameter
 
 # Parameter-name heuristics (reuse the same vocabularies the old engine used).
 _PATHISH = {
@@ -27,11 +27,18 @@ _REDIRECTISH = {"url", "redirect", "next", "return", "returnurl", "dest",
                 "destination", "u", "to", "target", "continue", "goto"}
 _INJECTABLE_LOCATIONS = {"query", "form", "json", "multipart"}
 
+# URL-ish parameter names — candidates for SSRF (server fetches the value).
+_SSRFISH = {"url", "uri", "link", "src", "source", "dest", "target", "callback",
+            "webhook", "fetch", "load", "image", "img", "file", "path", "proxy",
+            "feed", "host", "domain", "redirect", "next", "return", "continue"}
+
 # Attacks whose *testing* half sends crafted/attack payloads, so they only run
 # on an authorized (non-passive) scan. Discovery/eligibility still happens.
 ACTIVE_ATTACKS = {
     C.SQL_INJECTION, C.XSS, C.PATH_TRAVERSAL, C.OPEN_REDIRECT,
     C.HPP, C.FILE_UPLOAD,
+    C.COMMAND_INJECTION, C.NOSQL_INJECTION, C.SSRF, C.SSTI, C.CSRF,
+    C.CRLF, C.STORED_XSS,
 }
 
 
@@ -103,6 +110,14 @@ def plan_tests(
         if pm.location == "query":
             add(C.HPP, ep, pm, "query parameter accepts duplicate values")
 
+        # --- Extended parameter-level attacks (phase-2 detectors) ---
+        if pm.location in _INJECTABLE_LOCATIONS:
+            add(C.COMMAND_INJECTION, ep, pm, f"{pm.location} parameter may reach a shell")
+            add(C.SSTI, ep, pm, f"{pm.location} parameter may reach a template engine")
+            add(C.CRLF, ep, pm, f"{pm.location} parameter may be reflected into a header")
+        if pm.name.lower() in _SSRFISH:
+            add(C.SSRF, ep, pm, "parameter name suggests the server fetches the value")
+
     # --- Endpoint-level attacks ---
     seen_hosts: set[str] = set()
     for ep in inventory.endpoints:
@@ -115,6 +130,11 @@ def plan_tests(
 
         if ep.kind == API:
             add(C.API_AUTHENTICATION, ep, None, "API endpoint — check auth enforcement")
+
+        # CSRF + Stored XSS apply to state-changing form endpoints.
+        if ep.kind == FORM and ep.method.upper() in ("POST", "PUT", "PATCH"):
+            add(C.CSRF, ep, None, "state-changing form endpoint")
+            add(C.STORED_XSS, ep, None, "form may persist and re-render input")
 
         # Security misconfiguration + sensitive info disclosure are assessed
         # once per host (headers/cookies/TLS/exposed resources are host-level,
@@ -136,6 +156,13 @@ def plan_tests(
         anchor = inventory.endpoints[0]
         add(C.AUTH, anchor, None,
             "authentication surface discovered" + ("" if auth_available else " (no credential supplied)"))
+        # NoSQL auth-bypass targets a login endpoint specifically.
+        login_ep = None
+        for url in auth.get("login_urls", []):
+            login_ep = next((e for e in inventory.endpoints if e.url == url), None)
+            if login_ep:
+                break
+        add(C.NOSQL_INJECTION, login_ep or anchor, None, "login endpoint — NoSQL operator-injection bypass")
 
     # --- Subdomain Takeover ---
     for sub in inventory.subdomains:

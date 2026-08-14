@@ -450,6 +450,125 @@ async def run_subdomain_takeover(plan, ctx: AttackContext):
     return out
 
 
+# --------------------------------------------------------------------------
+# Extended attacks (phase-2 detectors: command/nosql/ssrf/ssti/csrf/crlf/stored)
+# --------------------------------------------------------------------------
+
+from app.services import phase2_checks  # noqa: E402
+from app.services.active_engine import _cmd_detect  # noqa: E402
+
+_CMD_PAYLOADS = [";id", "|id", "`id`", "$(id)"]
+
+
+async def run_command_injection(plan, ctx: AttackContext):
+    out = []
+    for pt in plan:
+        ep, pm = ctx.inventory.endpoint(pt.endpoint_id), ctx.inventory.parameter(pt.parameter_id)
+        if ep is None or pm is None:
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="missing target"))
+            continue
+        if ctx.passive_only:
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
+            continue
+        ev, payload, base, test, ran = await _probe_param(ctx, ep, pm, _CMD_PAYLOADS, _cmd_detect)
+        if not ran:
+            out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence="baseline request failed"))
+            continue
+        if ev:
+            f = _finding(C.COMMAND_INJECTION, ep, pm, "Command Injection", "critical", ev, payload, base, test,
+                         f"cmd_injection|{ep.normalized_route}|{pm.location}:{pm.name}")
+            out.append(_exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200], finding=f))
+        else:
+            out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
+                             evidence="No OS command output observed after injection."))
+    return out
+
+
+def _phase2_param_runner(attack, detector, **kw):
+    """Build a param-level runner around a phase2_checks.check_* detector with
+    signature (fetcher, url, param) (+ optional kwargs)."""
+    async def runner(plan, ctx: AttackContext):
+        out = []
+        for pt in plan:
+            ep, pm = ctx.inventory.endpoint(pt.endpoint_id), ctx.inventory.parameter(pt.parameter_id)
+            if ep is None or pm is None:
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="missing target"))
+                continue
+            if ctx.passive_only:
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
+                continue
+            try:
+                extra = dict(kw)
+                if attack == C.SSRF:
+                    extra["example"] = pm.original_value or ""
+                findings = await detector(ctx.fetcher, ep.url, pm.name, **extra)
+            except Exception as exc:
+                out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence=f"probe error: {exc}"))
+                continue
+            if findings:
+                out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
+                                 evidence=findings[0].evidence, finding=findings[0]))
+            else:
+                out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
+                                 evidence="No evidence for this attack on the tested parameter."))
+        return out
+    return runner
+
+
+async def run_nosql_injection(plan, ctx: AttackContext):
+    out = []
+    for pt in plan:
+        ep = ctx.inventory.endpoint(pt.endpoint_id)
+        if ep is None:
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="missing endpoint"))
+            continue
+        if ctx.passive_only:
+            out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
+            continue
+        try:
+            findings = await phase2_checks.check_nosql_injection(ctx.fetcher, ep.url)
+        except Exception as exc:
+            out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence=f"probe error: {exc}"))
+            continue
+        if findings:
+            out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
+                             evidence=findings[0].evidence, finding=findings[0]))
+        else:
+            out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
+                             evidence="Operator-injection login did not bypass authentication."))
+    return out
+
+
+def _phase2_endpoint_runner(attack, detector):
+    """Endpoint-level runner (CSRF/Stored-XSS): calls detector(fetcher, url, ...)."""
+    async def runner(plan, ctx: AttackContext):
+        out = []
+        for pt in plan:
+            ep = ctx.inventory.endpoint(pt.endpoint_id)
+            if ep is None:
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="missing endpoint"))
+                continue
+            if ctx.passive_only:
+                out.append(_exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — not probed"))
+                continue
+            try:
+                if attack == C.STORED_XSS:
+                    findings = await detector(ctx.fetcher, ep.url, ep.url)
+                else:
+                    findings = await detector(ctx.fetcher, ep.url)
+            except Exception as exc:
+                out.append(_exec(pt, TestStatus.INCONCLUSIVE, evidence=f"probe error: {exc}"))
+                continue
+            if findings:
+                out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
+                                 evidence=findings[0].evidence, finding=findings[0]))
+            else:
+                out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
+                                 evidence="No evidence for this attack on the tested endpoint."))
+        return out
+    return runner
+
+
 ATTACK_RUNNERS = {
     C.SQL_INJECTION: run_sql_injection,
     C.XSS: run_xss,
@@ -463,4 +582,12 @@ ATTACK_RUNNERS = {
     C.SENSITIVE_INFO_DISCLOSURE: run_sensitive_info,
     C.VHOST_ISOLATION: run_vhost_isolation,
     C.SUBDOMAIN_TAKEOVER: run_subdomain_takeover,
+    # Extended (phase-2) attacks.
+    C.COMMAND_INJECTION: run_command_injection,
+    C.NOSQL_INJECTION: run_nosql_injection,
+    C.SSRF: _phase2_param_runner(C.SSRF, phase2_checks.check_ssrf),
+    C.SSTI: _phase2_param_runner(C.SSTI, phase2_checks.check_ssti),
+    C.CRLF: _phase2_param_runner(C.CRLF, phase2_checks.check_crlf),
+    C.CSRF: _phase2_endpoint_runner(C.CSRF, phase2_checks.check_csrf),
+    C.STORED_XSS: _phase2_endpoint_runner(C.STORED_XSS, phase2_checks.check_stored_xss),
 }

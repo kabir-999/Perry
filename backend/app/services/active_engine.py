@@ -30,24 +30,137 @@ except Exception:  # pragma: no cover - exercised only when not installed
     _PLAYWRIGHT_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
+# ProbeRecorder — a log of every payload actually sent, whatever the result
+# ---------------------------------------------------------------------------
+# A finding is only produced when an attack succeeds, so the fact that a test
+# passed (came back "not vulnerable") leaves no trace on its own. The recorder
+# captures each attempt — success or negative — so the report can show what was
+# tried and what happened, not just the hits. It is optional: when no recorder
+# is passed the engine behaves exactly as before.
+
+# Human-readable description of the signal each active test looks for, keyed by
+# the test's dedup prefix. Shown in the probe log so a negative result reads as
+# "this specific signal was checked and not seen", not just "nothing found".
+_PROBE_SIGNAL = {
+    "reflected_xss": "marker '<z>' reflected unescaped in the response body",
+    "sqli": "database error signature (MySQL/PostgreSQL/Oracle/SQLite/MSSQL) not in baseline",
+    "path_traversal": "/etc/passwd content ('root:...:0:0:') in the response",
+    "cmd_injection": "OS command output ('uid=...gid=...') not in baseline",
+    "open_redirect": "Location header redirects to the external marker host",
+    "hpp": "duplicated parameter changed the response and the second value reflected",
+}
+
+# Short, human label per attack for the `finding` sentence in each probe entry.
+_ATTACK_LABEL = {
+    "reflected_xss": "reflected XSS",
+    "sqli": "SQL injection",
+    "path_traversal": "path traversal",
+    "cmd_injection": "OS command injection",
+    "open_redirect": "open redirect",
+    "hpp": "HTTP parameter pollution",
+}
+
+# Stable, machine-readable case names per (attack, payload). Kept as string
+# literals (not references to payload constants defined lower in this file) so
+# the mapping is import-order independent. Unknown payloads fall back to a
+# deterministic `<attack>_probe_<seq>` name.
+_CASE_NAME = {
+    ("cmd_injection", ";id"): "cmd_injection_semicolon",
+    ("cmd_injection", "|id"): "cmd_injection_pipe",
+    ("cmd_injection", "`id`"): "cmd_injection_backtick",
+    ("cmd_injection", "$(id)"): "cmd_injection_command_substitution",
+    ("sqli", "'"): "sqli_single_quote",
+    ("sqli", "1'\""): "sqli_quote_pair",
+    ("sqli", "1) OR ('1'='1"): "sqli_boolean_or",
+    ("reflected_xss", "wf7xq<z>'\""): "xss_reflected_marker",
+    ("path_traversal", "../../../../../../etc/passwd"): "path_traversal_etc_passwd",
+    ("open_redirect", "https://external.invalid/wf-redirect"): "open_redirect_external_marker",
+}
+
+
+def _case_name(dedup_prefix: str, payload: str, seq: int) -> str:
+    name = _CASE_NAME.get((dedup_prefix, payload))
+    if name:
+        return name
+    if dedup_prefix == "hpp":
+        return "hpp_duplicate_parameter"
+    if dedup_prefix == "path_traversal":
+        return f"path_traversal_encoded_{seq}"
+    return f"{dedup_prefix}_probe_{seq}"
+
+
+@dataclass
+class ProbeRecorder:
+    """Append-only log of active probes. Records the payload, where it was
+    injected, the response status/size, and the verdict — for every attempt."""
+
+    entries: list[dict] = field(default_factory=list)
+    _seq: int = 0
+
+    def record(self, *, dedup_prefix: str, target: "ParamTarget", payload: str,
+               response, evidence, note: str = "") -> None:
+        self._seq += 1
+        ok = bool(response is not None and getattr(response, "ok", False))
+        status = getattr(response, "status_code", None) if ok else None
+        if ok:
+            size = getattr(response, "body_bytes", None)
+            if size is None:
+                size = len(getattr(response, "text", "") or "")
+        else:
+            size = 0
+        signal = _PROBE_SIGNAL.get(dedup_prefix, note or "test-specific signal")
+        label = _ATTACK_LABEL.get(dedup_prefix, dedup_prefix)
+        if evidence:
+            verdict = "vulnerable"
+            finding = f"{label} confirmed — {signal.split(' not in baseline')[0]} was observed"
+        elif not ok:
+            verdict = "error"
+            finding = f"Request failed; {label} could not be evaluated"
+        else:
+            verdict = "not_vulnerable"
+            finding = f"No {label} evidence; {signal} was not observed"
+        self.entries.append({
+            "seq": self._seq,
+            # Stable, machine-readable case name (e.g. cmd_injection_pipe).
+            "name": _case_name(dedup_prefix, payload or "", self._seq),
+            "test": dedup_prefix,
+            "location": target.location,
+            "parameter": target.name,
+            "method": target.method,
+            "url": target.url,
+            # The exact payload sent — kept visible so a finding is reproducible.
+            "payload": (payload or "")[:120],
+            "response_status": status,
+            "response_bytes": size,
+            # What the detector expected to see, vs whether it saw it.
+            "signal_checked": signal,
+            "signal_matched": bool(evidence),
+            "verdict": verdict,
+            # Concrete, evidence-backed sentence — never "possible vulnerability".
+            "finding": finding,
+            "evidence": (str(evidence)[:200] if evidence else None),
+        })
+
+
+# ---------------------------------------------------------------------------
 # ParamTarget — a location-agnostic view of one testable parameter
 # ---------------------------------------------------------------------------
 
-_LOCATIONS = ("query", "form", "json", "header", "graphql_variable")
+_LOCATIONS = ("query", "form", "json", "header")
 
 
 @dataclass
 class ParamTarget:
     url: str
     name: str
-    location: str = "query"  # query | form | json | header | graphql_variable
+    location: str = "query"  # query | form | json | header
     method: str = "GET"
     example: str = "1"
 
     @classmethod
     def from_discovered(cls, p: DiscoveredParam) -> "ParamTarget":
         loc = p.param_type if p.param_type in _LOCATIONS else "query"
-        method = p.method or ("POST" if loc in ("form", "json", "graphql_variable") else "GET")
+        method = p.method or ("POST" if loc in ("form", "json") else "GET")
         return cls(
             url=p.url, name=p.name, location=loc, method=method.upper(),
             example=p.example_value or "1",
@@ -105,28 +218,23 @@ def _set_query(url: str, name: str, value: str) -> str:
                        urlencode(q, doseq=True), ""))
 
 
-def build_request(target: ParamTarget, value) -> dict:
-    """Build fetch() kwargs that place ``value`` in ``target``'s location.
-    ``value`` is usually a string but for NoSQL-injection payloads (Mongo
-    operator shapes) it is a dict — httpx serializes nested JSON either way."""
+def build_request(target: ParamTarget, value: str) -> dict:
+    """Build fetch() kwargs that place ``value`` in ``target``'s location."""
     if target.location == "query":
-        return {"url": _set_query(target.url, target.name, str(value)), "method": "GET"}
+        return {"url": _set_query(target.url, target.name, value), "method": "GET"}
     if target.location == "form":
         return {"url": target.url, "method": "POST",
                 "data": {target.name: value}}
     if target.location == "json":
         return {"url": target.url, "method": "POST",
                 "json": {target.name: value}}
-    if target.location == "graphql_variable":
-        return {"url": target.url, "method": "POST",
-                "json": {"variables": {target.name: value}}}
     if target.location == "header":
         return {"url": target.url, "method": "GET",
-                "headers": {target.name: str(value)}}
-    return {"url": _set_query(target.url, target.name, str(value)), "method": "GET"}
+                "headers": {target.name: value}}
+    return {"url": _set_query(target.url, target.name, value), "method": "GET"}
 
 
-async def _send(fetcher: Fetcher, target: ParamTarget, value):
+async def _send(fetcher: Fetcher, target: ParamTarget, value: str):
     req = build_request(target, value)
     return await fetcher.fetch(
         req["url"], method=req.get("method", "GET"),
@@ -158,11 +266,20 @@ _SQL_ERR = re.compile(
     re.IGNORECASE,
 )
 _PASSWD = re.compile(r"root:.*?:0:0:", re.MULTILINE)
+_CMD_EVIDENCE = re.compile(
+    r"uid=\d+\([^)]+\)\s+gid=\d+|/bin/(?:sh|bash):|command not found|"
+    r"syntax error near unexpected token",
+    re.IGNORECASE,
+)
 _XSS_MARKER = "wf7xq<z>'\""
 
 _PATHISH = {
     "file", "path", "page", "doc", "document", "template", "include",
     "download", "dir", "folder", "load", "read", "filename", "name",
+}
+_CMDISH = {
+    "cmd", "command", "exec", "execute", "ping", "host", "ip", "domain",
+    "url", "dns", "query", "run", "system", "shell", "code",
 }
 _REDIRECTISH = {"url", "redirect", "next", "return", "dest", "u", "to", "target"}
 
@@ -204,6 +321,12 @@ def _trav_detect(payload, base_raw, test_raw):
     return m.group(0)[:100] if m else None
 
 
+def _cmd_detect(payload, base_raw, test_raw):
+    if _CMD_EVIDENCE.search(test_raw) and not _CMD_EVIDENCE.search(base_raw):
+        return _first(_CMD_EVIDENCE, test_raw)
+    return None
+
+
 def _first(rx, text):
     m = rx.search(text)
     return m.group(0)[:120] if m else ""
@@ -218,6 +341,9 @@ _TESTS: list[_Test] = [
           lambda t: t.name.lower() in _PATHISH,
           ["../../../../../../etc/passwd", "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"],
           _trav_detect, encoders=[encode_variants, unicode_slash_variants]),
+    _Test("Command Injection", "input_validation", "cmd_injection", "high",
+          lambda t: t.name.lower() in _CMDISH,
+          [";id", "|id", "`id`", "$(id)"], _cmd_detect, encoders=[encode_variants]),
 ]
 
 
@@ -228,6 +354,8 @@ _TESTS: list[_Test] = [
 def priority(target: ParamTarget, test: _Test) -> int:
     name = target.name.lower()
     score = 10
+    if test.dedup_prefix == "cmd_injection" and name in _CMDISH:
+        score += 40
     if test.dedup_prefix == "path_traversal" and name in _PATHISH:
         score += 30
     if test.dedup_prefix == "reflected_xss" and name in ("q", "search", "query", "s", "name", "message", "comment"):
@@ -248,6 +376,7 @@ async def run_active_tests(
     params: list[DiscoveredParam],
     *,
     max_targets: int = 12,
+    recorder: "ProbeRecorder | None" = None,
 ) -> list[FindingCandidate]:
     # Build unique targets across all locations.
     targets: dict[str, ParamTarget] = {}
@@ -265,13 +394,15 @@ async def run_active_tests(
 
     findings: list[FindingCandidate] = []
     for target in ranked:
-        findings += await _test_target(fetcher, target)
-        findings += await _hpp_test(fetcher, target)
-        findings += await _open_redirect(fetcher, target)
+        findings += await _test_target(fetcher, target, recorder=recorder)
+        findings += await _hpp_test(fetcher, target, recorder=recorder)
+        findings += await _open_redirect(fetcher, target, recorder=recorder)
     return findings
 
 
-async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandidate]:
+async def _test_target(
+    fetcher: Fetcher, target: ParamTarget, *, recorder: "ProbeRecorder | None" = None
+) -> list[FindingCandidate]:
     baseline_res = await _send(fetcher, target, target.example)
     if not baseline_res.ok:
         return []
@@ -289,9 +420,12 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
         hit = False
         for payload in test.payloads[:4]:
             res = await _send(fetcher, target, payload)
+            evidence = test.detect(payload, base_raw, res.text) if res.ok else None
+            if recorder is not None:
+                recorder.record(dedup_prefix=test.dedup_prefix, target=target,
+                                payload=payload, response=res, evidence=evidence)
             if not res.ok:
                 continue
-            evidence = test.detect(payload, base_raw, res.text)
             if evidence:
                 out.append(
                     _finding(
@@ -314,9 +448,12 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
                         variants.append(v)
             for payload in variants[:4]:
                 res = await _send(fetcher, target, payload)
+                evidence = test.detect(payload, base_raw, res.text) if res.ok else None
+                if recorder is not None:
+                    recorder.record(dedup_prefix=test.dedup_prefix, target=target,
+                                    payload=payload, response=res, evidence=evidence)
                 if not res.ok:
                     continue
-                evidence = test.detect(payload, base_raw, res.text)
                 if evidence:
                     out.append(
                         _finding(
@@ -327,15 +464,20 @@ async def _test_target(fetcher: Fetcher, target: ParamTarget) -> list[FindingCan
     return out
 
 
-async def _open_redirect(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandidate]:
+async def _open_redirect(
+    fetcher: Fetcher, target: ParamTarget, *, recorder: "ProbeRecorder | None" = None
+) -> list[FindingCandidate]:
     if target.location != "query" or target.name.lower() not in _REDIRECTISH:
         return []
     marker = "https://external.invalid/wf-redirect"
     res = await _send(fetcher, target, marker)
-    if not res.ok or res.status_code not in (301, 302, 303, 307, 308):
-        return []
-    location = res.headers.get("location", "")
-    if "external.invalid" in location:
+    is_redirect = res.ok and res.status_code in (301, 302, 303, 307, 308)
+    location = res.headers.get("location", "") if res.ok else ""
+    evidence = f"Location: {location}" if (is_redirect and "external.invalid" in location) else None
+    if recorder is not None:
+        recorder.record(dedup_prefix="open_redirect", target=target, payload=marker,
+                        response=res, evidence=evidence)
+    if evidence:
         return [
             FindingCandidate(
                 title="Open redirect (query)",
@@ -368,19 +510,19 @@ def _finding(target, test, payload, evidence, confidence, base, analyzed):
         method=target.method,
         parameter=target.name,
         evidence=str(evidence)[:300],
-        request_summary=f"{target.method} {target.url} [{loc}:{target.name}={str(payload)[:40]}]",
+        request_summary=f"{target.method} {target.url} [{loc}:{target.name}={payload[:40]}]",
         response_summary=f"HTTP {analyzed.status_code}; baseline HTTP {base.status_code}",
         description=f"The '{target.name}' {loc} parameter shows an indicator "
         f"for {test.name.lower()}.",
         impact="",  # Groq assigns impact from evidence.
         remediation="",
-        parameter_location=loc,
-        reproducibility="Reproducible - replay the recorded request with the same payload",
         dedup_key=f"{test.dedup_prefix}|{urlsplit(target.url).path}|{loc}:{target.name}",
     )
 
 
-async def _hpp_test(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandidate]:
+async def _hpp_test(
+    fetcher: Fetcher, target: ParamTarget, *, recorder: "ProbeRecorder | None" = None
+) -> list[FindingCandidate]:
     """HTTP Parameter Pollution: compare single vs duplicate parameter. Only
     query parameters; conservative reporting."""
     if target.location != "query":
@@ -403,7 +545,13 @@ async def _hpp_test(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandid
     # Only flag when the duplicate meaningfully changes behaviour AND one of
     # the injected values is reflected (a security-relevant signal).
     reflects_b = "WFB" in dup.text
-    if meaningfully_different(a, b) and reflects_b:
+    hit = meaningfully_different(a, b) and reflects_b
+    if recorder is not None:
+        recorder.record(
+            dedup_prefix="hpp", target=target,
+            payload=f"{target.name}=WFA&{target.name}=WFB", response=dup,
+            evidence=("duplicate changed response; second value reflected" if hit else None))
+    if hit:
         return [
             FindingCandidate(
                 title="HTTP parameter pollution",
