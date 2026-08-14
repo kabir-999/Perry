@@ -14,11 +14,11 @@ from app.config import settings
 
 
 def _to_async_url(url: str) -> str:
-    """Ensure the DATABASE_URL uses an async driver (psycopg async)."""
-    if url.startswith("postgresql+psycopg://"):
+    """Ensure the DATABASE_URL uses an async driver (asyncpg)."""
+    if url.startswith("postgresql+asyncpg://"):
         return url
     if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url
 
 

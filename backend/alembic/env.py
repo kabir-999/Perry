@@ -9,14 +9,14 @@ from app.database import Base
 # Import models so they register on Base.metadata before autogenerate runs.
 import app.models  # noqa: F401
 
-def _to_psycopg_url(url: str) -> str:
+def _to_asyncpg_url(url: str) -> str:
     if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url
 
 
 config = context.config
-config.set_main_option("sqlalchemy.url", _to_psycopg_url(settings.DATABASE_URL))
+config.set_main_option("sqlalchemy.url", _to_asyncpg_url(settings.DATABASE_URL))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

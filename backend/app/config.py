@@ -40,22 +40,22 @@ class Settings(BaseSettings):
 
     # --- Database ---
     # Railway (and most Postgres hosts) inject DATABASE_URL as
-    # "postgres://..." or "postgresql://...", which SQLAlchemy 2.0 + psycopg3
-    # rejects — it requires the "postgresql+psycopg://" dialect prefix. The
+    # "postgres://..." or "postgresql://...", which SQLAlchemy 2.0 + asyncpg
+    # rejects — it requires the "postgresql+asyncpg://" dialect prefix. The
     # validator below rewrites the scheme so the Railway-provided value works
     # unmodified; a manually-configured local URL that already has the right
     # scheme passes through untouched.
     DATABASE_URL: str = (
-        "postgresql+psycopg://web_fuzzer:web_fuzzer@localhost:5432/web_fuzzer"
+        "postgresql+asyncpg://web_fuzzer:web_fuzzer@localhost:5432/web_fuzzer"
     )
 
     @field_validator("DATABASE_URL")
     @classmethod
     def _normalize_database_url(cls, v: str) -> str:
         if v.startswith("postgres://"):
-            return "postgresql+psycopg://" + v[len("postgres://") :]
+            return "postgresql+asyncpg://" + v[len("postgres://") :]
         if v.startswith("postgresql://"):
-            return "postgresql+psycopg://" + v[len("postgresql://") :]
+            return "postgresql+asyncpg://" + v[len("postgresql://") :]
         return v
 
     # --- Authentication ---
