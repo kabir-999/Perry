@@ -194,8 +194,12 @@ async def _probe_path(ctx, ep, payloads, detect):
 # 2. XSS (reflected + DOM)
 # --------------------------------------------------------------------------
 
+_MAX_DOM_XSS_PROBES = 5
+
+
 async def run_xss(plan, ctx: AttackContext):
     out = []
+    dom_probes_used = 0
     for pt in plan:
         ep, pm = ctx.inventory.endpoint(pt.endpoint_id), ctx.inventory.parameter(pt.parameter_id)
         if ep is None or pm is None:
@@ -213,8 +217,12 @@ async def run_xss(plan, ctx: AttackContext):
                           if _budget_gone(ctx) else "baseline request failed"),
             ))
             continue
-        if not ev and pm.location == "query":
+        if not ev and pm.location == "query" and dom_probes_used < _MAX_DOM_XSS_PROBES:
             # DOM-based reflection the raw-HTML diff can't see (browser render).
+            # Each probe launches a real headless browser, so this is bounded —
+            # unbounded here previously stalled real multi-parameter scans for
+            # many minutes launching Chromium once per query parameter.
+            dom_probes_used += 1
             dom = await check_dom_xss(_param_target(ep, pm))
             if dom:
                 out.append(_exec(pt, TestStatus.VULNERABLE, confidence="potential",
