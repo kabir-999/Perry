@@ -46,7 +46,8 @@ class EncryptedText(TypeDecorator):
         return None
 
     def bind_expression(self, bindvalue):
-        return func.pgp_sym_encrypt(bindvalue, settings.LOG_ENCRYPTION_KEY)
+        from sqlalchemy import type_coerce, Text
+        return func.pgp_sym_encrypt(type_coerce(bindvalue, Text()), settings.LOG_ENCRYPTION_KEY)
 
     def column_expression(self, col):
         return func.pgp_sym_decrypt(col, settings.LOG_ENCRYPTION_KEY)

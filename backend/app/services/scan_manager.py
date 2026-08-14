@@ -97,6 +97,7 @@ def scan_snapshot(scan: Scan) -> dict:
         "attack_matrix": _load(scan.attack_matrix_json, []),
         "attack_coverage": _load(scan.attack_coverage_json, {}),
         "coverage": _load(scan.coverage_json, {}),
+        "attack_logs": _load(scan.attack_logs_json, []),
     }
 
 
@@ -469,6 +470,7 @@ class ScanManager:
             scan.attack_matrix_json = json.dumps(deep.attack_matrix or [])
             scan.attack_coverage_json = json.dumps(deep.attack_coverage or {})
             scan.coverage_json = json.dumps(deep.coverage or {})
+            scan.attack_logs_json = json.dumps(deep.attack_logs or [])
             scan.requests_made = deep.requests_made
             scan.deep_progress = 100
             scan.status = ScanStatus.COMPLETED.value

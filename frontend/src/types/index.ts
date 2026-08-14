@@ -108,6 +108,39 @@ export interface AttackMatrixRow {
   evidence: string;
 }
 
+/** Severity level of a structured attack log record. */
+export type AttackLogLevel =
+  | "DEBUG"
+  | "INFO"
+  | "SUCCESS"
+  | "WARNING"
+  | "ERROR"
+  | "ALERT";
+
+/** One production-grade structured JSON log record for a single attack event
+ *  — emitted for every attack attempt regardless of outcome. */
+export interface AttackLogRecord {
+  seq: number;
+  timestamp: string;
+  level: AttackLogLevel;
+  attack: string;
+  attack_display: string;
+  event: string;
+  message: string;
+  status: string;
+  confidence: string;
+  endpoint: string;
+  method: string;
+  parameter: string;
+  location: string;
+  payload: string;
+  evidence: string;
+  test_id: string;
+  request_summary: string;
+  response_summary: string;
+  meta: Record<string, unknown>;
+}
+
 /** Per-attack coverage rollup, keyed by attack id. */
 export interface AttackCoverageEntry {
   attack: string;
@@ -155,6 +188,9 @@ export interface ScanSnapshot {
   attack_coverage?: Record<string, AttackCoverageEntry>;
   /** Discovery + testing coverage — always present, real counts. */
   coverage?: CoverageMetrics;
+  /** Production-grade structured JSON logs for every attack attempt, in
+   *  emission order. Grouped by `attack` for display under each attack box. */
+  attack_logs?: AttackLogRecord[];
 }
 
 export interface Subdomain {

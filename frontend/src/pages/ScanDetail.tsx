@@ -4,6 +4,8 @@ import { scansApi } from "../services/api";
 import { SEVERITY_COLOR } from "../theme";
 import type {
   AttackCoverageEntry,
+  AttackLogLevel,
+  AttackLogRecord,
   AttackMatrixRow,
   AttackStatus,
   Finding,
@@ -78,6 +80,18 @@ const ATTACK_STATUS_STYLE: Record<
   NOT_TESTED: { bg: "#fdf3e3", fg: "#b45309", label: "Not tested" },
   INCONCLUSIVE: { bg: "#f1ecfb", fg: "#6d4fb8", label: "Inconclusive" },
   NOT_APPLICABLE: { bg: "#f4efe6", fg: "#948972", label: "N/A" },
+};
+
+const LOG_LEVEL_STYLE: Record<
+  AttackLogLevel,
+  { bg: string; fg: string; dot: string }
+> = {
+  DEBUG: { bg: "#eef0f2", fg: "#6b7280", dot: "#9ca3af" },
+  INFO: { bg: "#eaf2fb", fg: "#1d4ed8", dot: "#3b82f6" },
+  SUCCESS: { bg: "#e7f4ec", fg: "#0f7a52", dot: "#16a34a" },
+  WARNING: { bg: "#fdf3e3", fg: "#b45309", dot: "#d97706" },
+  ERROR: { bg: "#fbe7e7", fg: "#b91c1c", dot: "#dc2626" },
+  ALERT: { bg: "#fbe3ef", fg: "#a1123f", dot: "#e11d48" },
 };
 
 function StatusChip({ status }: { status: AttackStatus }) {
@@ -198,6 +212,21 @@ export default function ScanDetail() {
     });
     return entries.map(([, v]) => v);
   }, [snap?.attack_coverage]);
+
+  // Structured attack logs, grouped by attack id so each attack box can show
+  // its own production JSON log stream when expanded.
+  const logsByAttack = useMemo(() => {
+    const map: Record<string, AttackLogRecord[]> = {};
+    for (const rec of snap?.attack_logs ?? []) {
+      (map[rec.attack] ??= []).push(rec);
+    }
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) => a.seq - b.seq);
+    }
+    return map;
+  }, [snap?.attack_logs]);
+
+  const [expandedAttack, setExpandedAttack] = useState<string | null>(null);
 
   const matrix = snap?.attack_matrix ?? [];
   const matrixShown = matrix.slice(0, MATRIX_CAP);
@@ -436,9 +465,14 @@ export default function ScanDetail() {
         </Panel>
       )}
 
-      {/* Attack Coverage — the 12 attack modules and their per-attack rollup */}
+      {/* Attack Coverage — the attack modules and their per-attack rollup.
+          Each row expands to reveal that attack's production JSON logs. */}
       {attackRows.length > 0 && (
         <Panel title="Attack Coverage">
+          <p className="mb-3 text-xs text-[#948972]">
+            Click any attack to expand its production JSON logs — every attempt is
+            recorded, whether it found a vulnerability or not.
+          </p>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
@@ -447,32 +481,26 @@ export default function ScanDetail() {
                   <th className="py-2 pr-3 font-medium">Status</th>
                   <th className="py-2 pr-3 text-right font-medium">Eligible</th>
                   <th className="py-2 pr-3 text-right font-medium">Tested</th>
-                  <th className="py-2 text-right font-medium">Vulnerable</th>
+                  <th className="py-2 pr-3 text-right font-medium">Vulnerable</th>
+                  <th className="py-2 text-right font-medium">Logs</th>
                 </tr>
               </thead>
               <tbody>
-                {attackRows.map((a: AttackCoverageEntry) => (
-                  <tr key={a.attack} className="border-t border-[#e6dcca]">
-                    <td className="py-2 pr-3 font-medium text-[#3a3122]">
-                      {a.display}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <StatusChip status={a.status} />
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
-                      {a.eligible}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
-                      {a.tested}
-                    </td>
-                    <td
-                      className="py-2 text-right tabular-nums font-semibold"
-                      style={{ color: a.vulnerable > 0 ? "#b91c1c" : "#948972" }}
-                    >
-                      {a.vulnerable}
-                    </td>
-                  </tr>
-                ))}
+                {attackRows.map((a: AttackCoverageEntry) => {
+                  const logs = logsByAttack[a.attack] ?? [];
+                  const open = expandedAttack === a.attack;
+                  return (
+                    <AttackCoverageRow
+                      key={a.attack}
+                      attack={a}
+                      logs={logs}
+                      open={open}
+                      onToggle={() =>
+                        setExpandedAttack(open ? null : a.attack)
+                      }
+                    />
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -721,6 +749,174 @@ function Detail({ label, text, mono }: { label: string; text: string; mono?: boo
         {text}
       </span>
     </div>
+  );
+}
+
+/* ------------------------------ attack logs ------------------------------ */
+
+function fmtLogTime(ts: string): string {
+  // ISO like 2026-08-14T09:12:33.123Z -> 09:12:33.123
+  const m = /T(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)/.exec(ts);
+  return m ? m[1] : ts;
+}
+
+function LogLevelChip({ level }: { level: AttackLogLevel }) {
+  const s = LOG_LEVEL_STYLE[level] ?? LOG_LEVEL_STYLE.INFO;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+      style={{ background: s.bg, color: s.fg }}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.dot }} />
+      {level}
+    </span>
+  );
+}
+
+function LogRecordRow({ record }: { record: AttackLogRecord }) {
+  const [open, setOpen] = useState(false);
+  const target =
+    record.endpoint &&
+    `${record.method || ""} ${record.endpoint}`.trim() +
+      (record.parameter ? ` [${record.location}:${record.parameter}]` : "");
+  return (
+    <div className="border-b border-[#efe7d6] last:border-b-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-start gap-2 py-1.5 text-left font-mono text-xs hover:bg-[#f3ecdd]"
+      >
+        <span className="shrink-0 text-[#b0a48c]">{fmtLogTime(record.timestamp)}</span>
+        <LogLevelChip level={record.level} />
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[#3a3122]">
+          {record.message}
+        </span>
+        <span className="shrink-0 text-[#c2b79e]">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="space-y-1.5 pb-2 pl-2 font-mono text-[11px] text-[#6f6552]">
+          {target && (
+            <div>
+              <span className="text-[#948972]">target: </span>
+              <span className="break-all text-[#4a4032]">{target}</span>
+            </div>
+          )}
+          {record.payload && (
+            <div>
+              <span className="text-[#948972]">payload: </span>
+              <span className="break-all text-[#b45309]">{record.payload}</span>
+            </div>
+          )}
+          {record.evidence && (
+            <div>
+              <span className="text-[#948972]">evidence: </span>
+              <span className="break-words text-[#4a4032]">{record.evidence}</span>
+            </div>
+          )}
+          <pre className="overflow-x-auto rounded bg-[#2b2318] p-2 text-[10px] leading-relaxed text-[#e6dcca]">
+            {JSON.stringify(record, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AttackLogView({ records }: { records: AttackLogRecord[] }) {
+  const [rawAll, setRawAll] = useState(false);
+  if (records.length === 0) {
+    return (
+      <p className="py-2 text-xs text-[#948972]">
+        No logs recorded for this attack.
+      </p>
+    );
+  }
+  const counts = records.reduce<Record<string, number>>((acc, r) => {
+    acc[r.level] = (acc[r.level] ?? 0) + 1;
+    return acc;
+  }, {});
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] uppercase tracking-wide text-[#948972]">
+          {records.length} log record{records.length === 1 ? "" : "s"}
+        </span>
+        {(Object.keys(counts) as AttackLogLevel[]).map((lvl) => (
+          <LogLevelChip key={lvl} level={lvl} />
+        ))}
+        <button
+          onClick={() => setRawAll((v) => !v)}
+          className="ml-auto rounded border border-[#d6c9b0] px-2 py-0.5 text-[11px] text-[#6f6552] hover:bg-[#e6dcca]"
+        >
+          {rawAll ? "Formatted view" : "Raw JSON"}
+        </button>
+      </div>
+      {rawAll ? (
+        <pre className="max-h-[24rem] overflow-auto rounded bg-[#2b2318] p-3 text-[10px] leading-relaxed text-[#e6dcca]">
+          {JSON.stringify(records, null, 2)}
+        </pre>
+      ) : (
+        <div className="max-h-[24rem] overflow-auto rounded border border-[#e6dcca] bg-[#fcf8f0] px-2">
+          {records.map((r) => (
+            <LogRecordRow key={r.seq} record={r} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AttackCoverageRow({
+  attack,
+  logs,
+  open,
+  onToggle,
+}: {
+  attack: AttackCoverageEntry;
+  logs: AttackLogRecord[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <>
+      <tr
+        onClick={onToggle}
+        className={`cursor-pointer border-t border-[#e6dcca] transition-colors hover:bg-[#f3ecdd] ${
+          open ? "bg-[#f3ecdd]" : ""
+        }`}
+      >
+        <td className="py-2 pr-3 font-medium text-[#3a3122]">
+          <span className="mr-1.5 inline-block text-[#b0a48c]">
+            {open ? "▾" : "▸"}
+          </span>
+          {attack.display}
+        </td>
+        <td className="py-2 pr-3">
+          <StatusChip status={attack.status} />
+        </td>
+        <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
+          {attack.eligible}
+        </td>
+        <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
+          {attack.tested}
+        </td>
+        <td
+          className="py-2 pr-3 text-right tabular-nums font-semibold"
+          style={{ color: attack.vulnerable > 0 ? "#b91c1c" : "#948972" }}
+        >
+          {attack.vulnerable}
+        </td>
+        <td className="py-2 text-right tabular-nums text-[#6f6552]">
+          {logs.length}
+        </td>
+      </tr>
+      {open && (
+        <tr className="border-t border-[#e6dcca] bg-[#fbf7ef]">
+          <td colSpan={6} className="px-2 py-3">
+            <AttackLogView records={logs} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

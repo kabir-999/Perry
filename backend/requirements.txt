@@ -4,7 +4,7 @@ pydantic==2.10.5
 pydantic-settings==2.7.1
 
 sqlalchemy[asyncio]==2.0.36
-psycopg[binary]>=3.2.10
+asyncpg>=0.29.0
 alembic==1.14.0
 
 httpx==0.28.1
