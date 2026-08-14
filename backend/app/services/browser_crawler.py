@@ -50,6 +50,20 @@ def _dedup_path(url: str) -> str:
     return f"{parts.netloc}{parts.path}?{names}"
 
 
+# A SPA route (React Router / Vue Router / etc.) is very often a <button> or
+# a <a> with no real href, wired to a client-side navigate() call — a plain
+# a[href] scrape never sees it, so its page (and whatever API calls that
+# page's JS fires) stays permanently undiscovered. Clicking every interactive
+# element surfaces those routes at the cost of also triggering whatever
+# on-click side effect a "real" action button has (submit, logout, delete) —
+# an accepted tradeoff for maximizing discovery, matching how the 12 attack
+# modules themselves already only run against a verified/authorized target.
+_CLICKABLE_SELECTOR = (
+    "a, button, [role='button'], input[type='button'], "
+    "input[type='submit'], [onclick]"
+)
+
+
 async def browser_crawl(
     scope: TargetScope,
     seed_url: str,
@@ -172,6 +186,10 @@ async def browser_crawl(
                         result.spa_routes.add(url)
 
                     await _extract_dom(page, url, scope, result, frontier, visited, seen_shapes, depth, max_depth)
+                    await _click_and_discover(
+                        page, url, scope, result, frontier, visited, seen_shapes,
+                        depth, max_depth, nav_timeout_ms, idle_timeout_ms,
+                    )
 
             finally:
                 await browser.close()
@@ -186,6 +204,68 @@ async def browser_crawl(
         f"{len(result.spa_routes)} SPA routes.",
     )
     return result
+
+
+async def _click_and_discover(
+    page, base_url, scope, result, frontier, visited, seen_shapes, depth, max_depth,
+    nav_timeout_ms, idle_timeout_ms,
+):
+    """Click every interactive element on the page to surface SPA routes
+    that only exist behind a JS navigate() call, never a real ``<a href>``.
+
+    Re-queries the element list by index on every iteration (a click can
+    re-render the DOM and invalidate prior handles) and restores ``base_url``
+    between clicks so each one starts from the same state. Best-effort only:
+    an element that no longer matches its index, a click that times out, or a
+    navigation that fails is skipped rather than aborting the rest.
+    """
+    if depth + 1 > max_depth:
+        return
+    try:
+        count = await page.eval_on_selector_all(_CLICKABLE_SELECTOR, "els => els.length")
+    except Exception:
+        return
+
+    budget = min(count, settings.BROWSER_CLICK_BUDGET_PER_PAGE)
+    for i in range(budget):
+        try:
+            elements = await page.query_selector_all(_CLICKABLE_SELECTOR)
+            if i >= len(elements):
+                break
+            el = elements[i]
+            if not await el.is_visible():
+                continue
+            await el.click(timeout=1500)
+        except Exception:
+            continue
+
+        try:
+            await page.wait_for_load_state("networkidle", timeout=idle_timeout_ms)
+        except Exception:
+            pass
+
+        try:
+            new_url = _canonical(page.url)
+        except Exception:
+            new_url = base_url
+
+        if new_url != base_url and scope.in_scope(new_url):
+            shape = _dedup_path(new_url)
+            if new_url not in visited and shape not in seen_shapes:
+                visited.add(new_url)
+                seen_shapes.add(shape)
+                frontier.append((new_url, depth + 1))
+                debug_log("CRAWLER", f"SPA route discovered via click: {new_url}")
+
+        if page.url != base_url:
+            try:
+                await page.goto(base_url, timeout=nav_timeout_ms, wait_until="domcontentloaded")
+                await page.wait_for_load_state("networkidle", timeout=idle_timeout_ms)
+            except Exception:
+                # base_url no longer loads (e.g. the click logged the session
+                # out) — stop clicking on this page rather than clicking
+                # blind against an unknown state.
+                break
 
 
 async def _extract_dom(page, base_url, scope, result, frontier, visited, seen_shapes, depth, max_depth):
