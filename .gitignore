@@ -32,4 +32,5 @@ yarn-error.log*
 # Logs / reports (generated at runtime)
 *.log
 backend/reports/
+backend/report.json
 .claude
