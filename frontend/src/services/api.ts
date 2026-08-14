@@ -11,7 +11,6 @@ import type {
   ScanEvent,
   ScanSnapshot,
   SignupPayload,
-  SourceFinding,
   Subdomain,
   TokenResponse,
   User,
@@ -127,11 +126,6 @@ export const scansApi = {
   endpoints: (scanId: string) =>
     client
       .get<DiscoveredEndpoint[]>(`/scans/${scanId}/endpoints`)
-      .then((r) => r.data),
-
-  sourceFindings: (scanId: string) =>
-    client
-      .get<SourceFinding[]>(`/scans/${scanId}/source-findings`)
       .then((r) => r.data),
 
   subdomains: (scanId: string) =>

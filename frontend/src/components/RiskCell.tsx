@@ -3,11 +3,11 @@ import type { Scan } from "../types";
 
 const RISK_HEX: Record<string, string> = SEVERITY_COLOR;
 
-/** Groq-authoritative risk for a scan — matches the Scan Detail page.
- *  Shows the level+score only when the AI actually analyzed the scan. */
+/** Deterministic risk for a scan — matches the Scan Detail page.
+ *  Shows the level+score only once the scan has a final risk. */
 export default function RiskCell({ scan }: { scan: Scan }) {
-  if (!scan.ai_analyzed) {
-    const terminal = ["completed", "failed", "cancelled"].includes(scan.status);
+  const terminal = ["completed", "failed", "cancelled"].includes(scan.status);
+  if (!scan.final_risk) {
     return (
       <span className="text-xs text-[#948972]">{terminal ? "—" : "…"}</span>
     );

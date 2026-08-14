@@ -23,11 +23,11 @@ const SIDES: Side[] = [
     lead: "For",
     emphasis: "Developers",
     blurb:
-      "Scan a site you own end to end — attack surface, live vulnerabilities, and the source behind them — before it ships.",
+      "Scan a site you own end to end — attack surface and live vulnerabilities across 12 attack classes — before it ships.",
     points: [
       "Crawls your site and probes for real vulnerabilities",
-      "Optional GitHub scan for secrets and vulnerable code",
-      "AI risk assessment and a downloadable report",
+      "Honest per-attack coverage: discovered vs. actually tested",
+      "Deterministic risk scoring and a downloadable report",
     ],
     accent: "#c2410c",
     accentHover: "#9a3412",
@@ -150,9 +150,9 @@ function Hero() {
       <div className="mt-6 flex flex-wrap justify-center gap-2">
         {[
           "Crawl & attack surface",
-          "Evidence-based severity",
-          "GitHub source analysis",
-          "AI risk assessment",
+          "12 attack modules",
+          "Test matrix & coverage",
+          "Deterministic risk scoring",
         ].map((c, i) => (
           <span
             key={c}

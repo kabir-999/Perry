@@ -53,6 +53,19 @@ class FindingCandidate:
     # report can state exactly what was and was not established.
     dependency: dict = field(default_factory=dict)
 
+    # --- Evidence fields (Part 9) --------------------------------------
+    # Where the tested parameter lived: query | form | json | path | header |
+    # cookie | multipart | graphql_variable. Empty when the finding isn't
+    # parameter-specific.
+    parameter_location: str = ""
+    # The identity the triggering request(s) were sent as, e.g.
+    # "unauthenticated", "authenticated as scanner test account",
+    # "scanner account A vs scanner account B".
+    auth_context: str = ""
+    # How to reproduce this exact finding, e.g. "Reproducible - replay the
+    # recorded request" vs "Single observation, not replayed".
+    reproducibility: str = ""
+
     def key(self) -> str:
         return self.dedup_key or f"{self.category}|{self.url}|{self.parameter}"
 

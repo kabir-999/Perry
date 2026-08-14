@@ -3,7 +3,6 @@ from app.models.scan import Scan, ScanEvent
 from app.models.endpoint import DiscoveredEndpoint, Parameter, Subdomain
 from app.models.finding import Finding
 from app.models.report import Report
-from app.models.repository import Repository, SourceFinding
 from app.models.user import User
 from app.models.verified_target import AuditLog, VerifiedTarget
 
@@ -19,6 +18,4 @@ __all__ = [
     "Subdomain",
     "Finding",
     "Report",
-    "Repository",
-    "SourceFinding",
 ]

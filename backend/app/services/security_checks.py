@@ -904,6 +904,78 @@ async def check_authz_boundary(
     return []
 
 
+def _header_dict(auth_header: str) -> dict[str, str]:
+    header_name, sep, header_value = auth_header.partition(":")
+    if sep:
+        return {header_name.strip(): header_value.strip()}
+    return {"Authorization": auth_header}
+
+
+async def check_two_account_authorization(
+    fetcher: Fetcher, url: str, auth_header_a: str | None, auth_header_b: str | None
+) -> list[FindingCandidate]:
+    """Two-scanner-account authorization/IDOR (BOLA) check.
+
+    Both credentials must be scanner-controlled identities explicitly
+    supplied for this authorized test environment (VerifiedTarget.auth_header
+    / auth_header_b) — this never tests against an arbitrary third-party
+    account, and never guesses or brute-forces an identifier. `url` must be a
+    resource actually observed during discovery (e.g. a URL Account A's own
+    session was seen requesting), so the id being probed is real, not
+    fabricated.
+
+    Fetches the same resource URL as Account A, then as Account B. A finding
+    only fires when Account B's request also succeeds (HTTP 200) and returns
+    content indistinguishable from Account A's response for the *same*
+    resource id — the strongest signal available without a domain model of
+    what "belongs to" A vs B, and evidence includes both raw responses so the
+    report is reproducible, never a guess.
+    """
+    if not auth_header_a or not auth_header_b:
+        return []
+
+    resp_a = await fetcher.fetch(url, headers=_header_dict(auth_header_a), use_cache=False)
+    resp_b = await fetcher.fetch(url, headers=_header_dict(auth_header_b), use_cache=False)
+    if not resp_a.ok or not resp_b.ok:
+        return []
+    if resp_a.status_code != 200 or resp_b.status_code != 200:
+        return []
+    if resp_a.body_bytes <= 2 or resp_a.text != resp_b.text:
+        return []
+
+    path = urlparse(url).path
+    return [
+        FindingCandidate(
+            title="Broken object-level authorization: second account can read another account's resource",
+            category="authorization",
+            severity="high",
+            confidence="confirmed",
+            url=url,
+            evidence=(
+                "Two independent scanner-controlled accounts (A and B) requested "
+                "the same resource URL. Account B received the exact same "
+                f"response Account A did ({resp_a.body_bytes} bytes), even though "
+                "the resource was only ever observed being accessed by Account A."
+            ),
+            request_summary=f"GET {url} — as Account A, then as Account B",
+            response_summary=f"HTTP 200 both times; identical body ({resp_a.body_bytes} bytes).",
+            description="A resource reachable by Account A's session was also "
+            "readable, byte-for-byte, by an unrelated Account B's session — "
+            "the server is not enforcing that a resource belongs to a specific "
+            "identity (a Broken Object Level Authorization / IDOR class issue).",
+            impact="Any authenticated user may be able to read (or, if the same "
+            "pattern holds for write endpoints, modify) other users' resources "
+            "simply by requesting their identifiers.",
+            remediation="Enforce an ownership check server-side on every request "
+            "that reads or writes a specific resource id, independent of "
+            "whether the caller is merely authenticated.",
+            auth_context="scanner account A vs scanner account B",
+            reproducibility="Reproducible - replay the recorded requests with each account's credential",
+            dedup_key=f"two_account_authz|{path}",
+        )
+    ]
+
+
 async def check_open_redirect(
     fetcher: Fetcher, url: str, param: str
 ) -> list[FindingCandidate]:

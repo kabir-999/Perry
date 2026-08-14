@@ -2,13 +2,12 @@ from app.services.active_engine import _TESTS, ParamTarget, _test_target, unicod
 from fixtures import FakeFetcher, ok_result
 
 
-def test_encoding_is_only_wired_for_traversal_and_command_injection():
+def test_encoding_is_only_wired_for_traversal():
     """XSS/SQLi already have a realistic plain-payload set; encoding every
     payload for every test class would multiply requests without adding
-    signal there — only path_traversal and command_injection escalate."""
+    signal there — only path_traversal escalates."""
     by_name = {t.name: t for t in _TESTS}
     assert by_name["Path Traversal"].encoders
-    assert by_name["Command Injection"].encoders
     assert by_name["Reflected XSS"].encoders == []
     assert by_name["SQL Injection"].encoders == []
 

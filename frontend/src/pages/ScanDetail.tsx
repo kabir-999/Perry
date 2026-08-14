@@ -3,13 +3,12 @@ import { Link, useParams } from "react-router-dom";
 import { scansApi } from "../services/api";
 import { SEVERITY_COLOR } from "../theme";
 import type {
+  AttackCoverageEntry,
+  AttackMatrixRow,
+  AttackStatus,
   Finding,
-  RepoInfo,
-  RiskFactor,
   RiskLevel,
   ScanSnapshot,
-  SourceFinding,
-  TestResult,
 } from "../types";
 
 const TERMINAL = ["completed", "failed", "cancelled"];
@@ -50,14 +49,55 @@ function riskHex(level: string): string {
   return RISK[level]?.hex ?? "#8a8173";
 }
 
+// MUST-run modules first, then the ADVANCED ones. Attacks not listed here
+// fall back to object order.
+const ATTACK_ORDER = [
+  "sqli",
+  "xss",
+  "path_traversal",
+  "command_injection",
+  "open_redirect",
+  "ssrf",
+  "auth",
+  "idor",
+  "csrf",
+  "xxe",
+  "ssti",
+  "deserialization",
+];
+
+// Cap the initial matrix render so a large surface doesn't lock the page.
+const MATRIX_CAP = 200;
+
+const ATTACK_STATUS_STYLE: Record<
+  AttackStatus,
+  { bg: string; fg: string; label: string }
+> = {
+  VULNERABLE: { bg: "#fbe7e7", fg: "#b91c1c", label: "Vulnerable" },
+  NOT_VULNERABLE: { bg: "#e7f4ec", fg: "#0f7a52", label: "Not vulnerable" },
+  NOT_TESTED: { bg: "#fdf3e3", fg: "#b45309", label: "Not tested" },
+  INCONCLUSIVE: { bg: "#f1ecfb", fg: "#6d4fb8", label: "Inconclusive" },
+  NOT_APPLICABLE: { bg: "#f4efe6", fg: "#948972", label: "N/A" },
+};
+
+function StatusChip({ status }: { status: AttackStatus }) {
+  const s = ATTACK_STATUS_STYLE[status] ?? ATTACK_STATUS_STYLE.NOT_APPLICABLE;
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+      style={{ background: s.bg, color: s.fg }}
+    >
+      {s.label}
+    </span>
+  );
+}
+
 export default function ScanDetail() {
   const { scanId } = useParams<{ scanId: string }>();
   const [snap, setSnap] = useState<ScanSnapshot | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
-  const [sourceFindings, setSourceFindings] = useState<SourceFinding[]>([]);
   const [error, setError] = useState<string | null>(null);
   const lastFindingCount = useRef(-1);
-  const fetchedSource = useRef(false);
   const fetchedTerminal = useRef(false);
 
   const isTerminal = snap ? TERMINAL.includes(snap.status) : false;
@@ -120,28 +160,14 @@ export default function ScanDetail() {
     }
   }, [scanId, snap, isTerminal]);
 
-  // Source findings are written in the same commit that sets repo_info, so
-  // its presence means the rows are queryable.
-  useEffect(() => {
-    if (!scanId || !snap?.repo_info || fetchedSource.current) return;
-    fetchedSource.current = true;
-    scansApi
-      .sourceFindings(scanId)
-      .then(setSourceFindings)
-      .catch(() => undefined);
-  }, [scanId, snap?.repo_info]);
-
   const fast = snap?.fast_result ?? null;
   const target = fast?.target || snap?.id || "";
-  const aiOk = !!snap?.ai_analyzed;
-  // The deterministic engine owns the score; the AI layer only narrates it.
-  const sentinel = snap?.sentinel_risk;
-  const riskLevel: RiskLevel = (sentinel?.severity?.toLowerCase() ??
-    (aiOk ? snap!.final_risk : "")) as RiskLevel;
-  const riskScore = sentinel?.score ?? (aiOk ? snap!.risk_score : 0);
-  const riskFactors: RiskFactor[] = snap?.risk_factors ?? [];
+  // The deterministic engine owns the score: overall_risk = highest confirmed
+  // finding, always present; final_risk is its categorical level.
+  const riskLevel: RiskLevel = (snap?.final_risk ?? "") as RiskLevel;
+  const riskScore = snap?.overall_risk ?? snap?.risk_score ?? 0;
 
-  // Severity distribution: prefer Groq's statistics, else derive from findings.
+  // Severity distribution derived from the deduplicated findings.
   const severityCounts = useMemo(() => {
     const c: Record<string, number> = {
       critical: 0,
@@ -151,13 +177,9 @@ export default function ScanDetail() {
       minimal: 0,
       info: 0,
     };
-    if (aiOk && snap?.ai_statistics) {
-      for (const k of STAT_ORDER) c[k] = snap.ai_statistics[k] ?? 0;
-      return c;
-    }
     for (const f of findings) c[f.severity] = (c[f.severity] ?? 0) + 1;
     return c;
-  }, [aiOk, snap?.ai_statistics, findings]);
+  }, [findings]);
   const totalSev = STAT_ORDER.reduce((n, k) => n + (severityCounts[k] ?? 0), 0);
 
   const checksDone = useMemo(
@@ -165,23 +187,20 @@ export default function ScanDetail() {
     [snap?.checks_done],
   );
 
-  // Dependency advisories render as a compact list; everything else gets a
-  // code block, most severe first.
-  const codeIssues = useMemo(
-    () =>
-      sourceFindings
-        .filter((sf) => sf.finding_type !== "dependency")
-        .sort(
-          (a, b) =>
-            SEVERITY_ORDER.indexOf(a.severity) -
-            SEVERITY_ORDER.indexOf(b.severity),
-        ),
-    [sourceFindings],
-  );
-  const vulnDeps = useMemo(
-    () => sourceFindings.filter((sf) => sf.finding_type === "dependency"),
-    [sourceFindings],
-  );
+  // Per-attack coverage rollup, ordered by the module order when available.
+  const attackRows = useMemo(() => {
+    const cov = snap?.attack_coverage ?? {};
+    const entries = Object.entries(cov);
+    entries.sort((a, b) => {
+      const ia = ATTACK_ORDER.indexOf(a[0]);
+      const ib = ATTACK_ORDER.indexOf(b[0]);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+    return entries.map(([, v]) => v);
+  }, [snap?.attack_coverage]);
+
+  const matrix = snap?.attack_matrix ?? [];
+  const matrixShown = matrix.slice(0, MATRIX_CAP);
 
   const sortedFindings = useMemo(
     () =>
@@ -238,7 +257,7 @@ export default function ScanDetail() {
     );
   }
 
-  const accent = aiOk ? riskHex(riskLevel || "minimal") : "#8a8173";
+  const accent = isTerminal ? riskHex(riskLevel || "minimal") : "#8a8173";
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
@@ -290,7 +309,7 @@ export default function ScanDetail() {
               )}
               {STATUS_LABEL[snap.status] ?? snap.status}
             </div>
-            {aiOk ? (
+            {isTerminal ? (
               <div className="mt-1 flex items-baseline gap-3">
                 <span
                   className="text-4xl font-bold capitalize"
@@ -298,20 +317,20 @@ export default function ScanDetail() {
                 >
                   {RISK[riskLevel]?.label ?? "Minimal"}
                 </span>
-                <span className="text-sm text-[#6f6552]">final risk</span>
+                <span className="text-sm text-[#6f6552]">overall risk</span>
               </div>
             ) : (
               <div className="mt-1 text-2xl font-semibold text-[#4a4032]">
-                {isTerminal ? "AI analysis unavailable" : "Analyzing…"}
+                Analyzing…
               </div>
             )}
           </div>
 
-          {aiOk && <ScoreRing score={riskScore} color={accent} />}
+          {isTerminal && <ScoreRing score={riskScore} color={accent} />}
         </div>
 
-        {/* Severity bar (from Groq stats, or findings) */}
-        {aiOk && totalSev > 0 && (
+        {/* Severity bar, derived from the deduplicated findings */}
+        {isTerminal && totalSev > 0 && (
           <div className="mt-5">
             <div className="flex h-2 overflow-hidden rounded-full bg-[#e6dcca]">
               {STAT_ORDER.map((s) =>
@@ -338,8 +357,25 @@ export default function ScanDetail() {
           </div>
         )}
 
-        {!aiOk && isTerminal && snap.ai_error && (
-          <p className="mt-3 text-sm text-[#6f6552]">{snap.ai_error}</p>
+        {isTerminal &&
+          (snap.assessment_confidence ||
+            typeof snap.assessment_coverage === "number") && (
+          <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-[#e3d8c4] pt-4">
+            <span className="text-xs uppercase tracking-widest text-[#6f6552]">
+              Assessment
+            </span>
+            {snap.assessment_confidence && (
+              <ConfidenceBadge confidence={snap.assessment_confidence} />
+            )}
+            {typeof snap.assessment_coverage === "number" && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#e3d8c4] bg-[#fbf7ef] px-2.5 py-1 text-xs font-semibold text-[#4a4032]">
+                Coverage {snap.assessment_coverage}%
+              </span>
+            )}
+          </div>
+        )}
+        {isTerminal && snap.assessment_warning && (
+          <p className="mt-2 text-xs text-[#8a6d1f]">{snap.assessment_warning}</p>
         )}
       </div>
 
@@ -400,166 +436,93 @@ export default function ScanDetail() {
         </Panel>
       )}
 
-      {/* AI Security Summary */}
-      {aiOk ? (
-        <Panel title="AI Security Summary" accent={accent}>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#4a4032]">
-            {snap.ai_summary || "No summary returned."}
-          </p>
-        </Panel>
-      ) : (
-        isTerminal && (
-          <p className="rounded-xl border border-[#e3d8c4] bg-[#fbf7ef] px-4 py-3 text-sm text-[#948972]">
-            {snap.ai_error || "AI analysis unavailable."}
-          </p>
-        )
-      )}
-
-      {/* Sentinel Risk — deterministic score with its contributors.
-          Scans predating the risk engine carry an empty object, so the guard
-          checks for real content rather than mere truthiness. */}
-      {sentinel && typeof sentinel.score === "number" && (
-        <Panel title={`Sentinel Overall Risk — ${sentinel.score}/100 ${sentinel.severity}`}>
-          <p className="mb-1 text-sm text-[#4a4032]">
-            {sentinel.explanation ?? ""}
-          </p>
-          {sentinel.aggregation && (
-            <p className="mb-2 text-xs text-[#4a4032]">
-              {sentinel.aggregation.base} pts from the strongest finding
-              {sentinel.aggregation.other_findings > 0 &&
-                ` + ${sentinel.aggregation.added_by_others} pts from ${sentinel.aggregation.other_findings} other finding(s)`}
-              {" = "}
-              {sentinel.score} / 100. {sentinel.aggregation.formula}.
-            </p>
-          )}
-          <p className="mb-4 text-xs text-[#948972]">
-            {sentinel.methodology ?? "Sentinel Risk Model"} ·{" "}
-            {sentinel.findings_considered ?? 0} finding(s) considered
-            {(sentinel.third_party_excluded ?? 0) > 0 &&
-              ` · ${sentinel.third_party_excluded} third-party observation(s) excluded`}
-          </p>
-          <ul className="space-y-2">
-            {(sentinel.contributors ?? []).map((c, i) => (
-              <li
-                key={c.finding_id + i}
-                className="rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] p-3"
-              >
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <span className="text-xs font-bold text-[#6f6552]">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <span className="text-sm font-semibold text-[#2b2318]">
-                    {c.title}
-                  </span>
-                  {c.cvss && (
-                    <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
-                      style={{ background: "#be123c22", color: "#be123c" }}>
-                      CVSS v4.0 {c.cvss.base_score} {c.cvss.severity}
-                    </span>
-                  )}
-                  {c.hardening && (
-                    <span className="rounded bg-[#b4530922] px-1.5 py-0.5 text-[10px] font-semibold text-[#b45309]">
-                      Hardening
-                    </span>
-                  )}
-                  <span className="ml-auto text-xs font-medium text-[#4a4032]">
-                    +{c.applied_points ?? 0} pts
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-[#6f6552]">
-                  Confidence {Math.round(c.confidence * 100)}% ·{" "}
-                  {c.affected_urls} endpoint(s) · {c.detection_status}
-                  {c.hardening?.means && (
-                    <span className="block text-[#948972]">
-                      {c.hardening.means}
-                    </span>
-                  )}
-                  {c.cvss?.vector && (
-                    <span className="block break-all font-mono text-[10px] text-[#948972]">
-                      {c.cvss.vector}
-                    </span>
-                  )}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      )}
-
-      {/* Risk Factors (Groq) */}
-      {aiOk && riskFactors.length > 0 && (
-        <Panel title={`Risk Factors (${riskFactors.length})`}>
-          <ul className="space-y-3">
-            {riskFactors.map((rf, i) => (
-              <RiskFactorCard key={i} rf={rf} />
-            ))}
-          </ul>
-        </Panel>
-      )}
-
-      {/* Source Code Analysis */}
-      {snap.repo_info && (
-        <Panel title="Source Code Analysis" accent="#0ea5e9">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold text-[#3a3122]">
-                <a href={snap.repo_info.url} target="_blank" rel="noreferrer" className="hover:underline">
-                  {snap.repo_info.provider === "github" ? "GitHub" : "GitLab"}: {snap.repo_info.owner}/{snap.repo_info.name}
-                </a>
-              </p>
-              <p className="text-xs text-[#6f6552]">
-                {repoSourceLabel(snap.repo_info)}
-              </p>
-            </div>
-            <div className="flex gap-4 text-center">
-              <div>
-                <p className="text-lg font-bold text-[#3a3122]">{snap.repo_info.files_analyzed}</p>
-                <p className="text-[10px] uppercase tracking-wide text-[#6f6552]">Files</p>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-[#3a3122]">{snap.repo_info.source_findings_count}</p>
-                <p className="text-[10px] uppercase tracking-wide text-[#6f6552]">Code Issues</p>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-[#3a3122]">{snap.repo_info.dependency_findings_count}</p>
-                <p className="text-[10px] uppercase tracking-wide text-[#6f6552]">Dependencies</p>
-              </div>
-            </div>
-          </div>
-          {snap.repo_info.status === "error" && (
-            <p className="mt-3 text-xs text-[#e11d48]">
-              {snap.repo_info.error ||
-                "Analysis failed or was skipped due to repository size limits."}
-            </p>
-          )}
-
-          {codeIssues.length > 0 && (
-            <ul className="mt-5 space-y-3 border-t border-[#e6dcca] pt-4">
-              {codeIssues.map((sf) => (
-                <SourceFindingCard key={sf.id} sf={sf} repoUrl={snap.repo_info!.url} />
-              ))}
-            </ul>
-          )}
-
-          {vulnDeps.length > 0 && (
-            <div className="mt-5 border-t border-[#e6dcca] pt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#6f6552]">
-                Vulnerable dependencies
-              </p>
-              <ul className="space-y-2">
-                {vulnDeps.map((sf) => (
-                  <DependencyRow key={sf.id} sf={sf} />
+      {/* Attack Coverage — the 12 attack modules and their per-attack rollup */}
+      {attackRows.length > 0 && (
+        <Panel title="Attack Coverage">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide text-[#948972]">
+                  <th className="py-2 pr-3 font-medium">Attack</th>
+                  <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 pr-3 text-right font-medium">Eligible</th>
+                  <th className="py-2 pr-3 text-right font-medium">Tested</th>
+                  <th className="py-2 text-right font-medium">Vulnerable</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attackRows.map((a: AttackCoverageEntry) => (
+                  <tr key={a.attack} className="border-t border-[#e6dcca]">
+                    <td className="py-2 pr-3 font-medium text-[#3a3122]">
+                      {a.display}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <StatusChip status={a.status} />
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
+                      {a.eligible}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
+                      {a.tested}
+                    </td>
+                    <td
+                      className="py-2 text-right tabular-nums font-semibold"
+                      style={{ color: a.vulnerable > 0 ? "#b91c1c" : "#948972" }}
+                    >
+                      {a.vulnerable}
+                    </td>
+                  </tr>
                 ))}
-              </ul>
-            </div>
-          )}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
 
-          {snap.repo_info.status !== "error" &&
-            sourceFindings.length === 0 && (
-              <p className="mt-3 text-xs text-[#6f6552]">
-                No source-code issues found in the analyzed files.
-              </p>
-            )}
+      {/* Test Matrix — every (endpoint, parameter, attack) cell and its outcome */}
+      {matrix.length > 0 && (
+        <Panel title={`Test Matrix (${matrix.length})`}>
+          <div className="max-h-[28rem] overflow-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead className="sticky top-0 bg-[#fbf7ef]">
+                <tr className="text-left text-[11px] uppercase tracking-wide text-[#948972]">
+                  <th className="py-2 pr-3 font-medium">Endpoint</th>
+                  <th className="py-2 pr-3 font-medium">Parameter</th>
+                  <th className="py-2 pr-3 font-medium">Attack</th>
+                  <th className="py-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matrixShown.map((row: AttackMatrixRow) => (
+                  <tr key={row.test_id} className="border-t border-[#e6dcca] align-top">
+                    <td className="py-2 pr-3 font-mono text-xs text-[#4a4032]">
+                      <span className="font-semibold text-[#6f6552]">
+                        {row.method}
+                      </span>{" "}
+                      {row.normalized_route || row.endpoint}
+                    </td>
+                    <td className="py-2 pr-3 font-mono text-xs text-[#4a4032]">
+                      {row.parameter || "—"}
+                      {row.location && (
+                        <span className="text-[#948972]"> ({row.location})</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-[#3a3122]">
+                      {row.attack_display}
+                    </td>
+                    <td className="py-2">
+                      <StatusChip status={row.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {matrix.length > MATRIX_CAP && (
+            <p className="mt-3 text-xs text-[#948972]">
+              Showing the first {MATRIX_CAP} of {matrix.length} tests.
+            </p>
+          )}
         </Panel>
       )}
 
@@ -573,15 +536,16 @@ export default function ScanDetail() {
         <Stat label="Requests" value={snap.requests_made} />
       </div>
 
-      {/* Full test matrix — every test that ran and its outcome */}
-      {(snap.test_results?.length ?? 0) > 0 && (
-        <Panel title="Security Tests">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {snap.test_results.map((t) => (
-              <TestRow key={t.name} test={t} />
-            ))}
-          </div>
-        </Panel>
+      {/* Expanded discovery coverage — real counts from browser crawling +
+          network capture, not just the static crawler. */}
+      {snap.coverage && (
+        <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-[#e3d8c4] bg-[#e6dcca] sm:grid-cols-5">
+          <Stat label="Forms" value={snap.coverage.forms_discovered} />
+          <Stat label="JS Bundles" value={snap.coverage.js_bundles_discovered} />
+          <Stat label="Network Reqs" value={snap.coverage.network_requests_captured} />
+          <Stat label="Auth Routes" value={snap.coverage.auth_routes_discovered} />
+          <Stat label="Uploads" value={snap.coverage.upload_endpoints_discovered} />
+        </div>
       )}
 
       {/* Deduplicated scanner findings (evidence) */}
@@ -600,20 +564,31 @@ export default function ScanDetail() {
           </ul>
         )}
       </Panel>
-
-      {/* Overall recommendation (Groq) */}
-      {aiOk && snap.ai_recommendation && (
-        <Panel title="Overall Recommendation" accent={accent}>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#4a4032]">
-            {snap.ai_recommendation}
-          </p>
-        </Panel>
-      )}
     </div>
   );
 }
 
 /* ------------------------------- components ------------------------------ */
+
+const CONFIDENCE_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
+  HIGH: { bg: "#e7f4ec", fg: "#0f7a52", label: "High confidence" },
+  MEDIUM: { bg: "#fdf3e3", fg: "#b45309", label: "Medium confidence" },
+  LOW: { bg: "#fdf3e3", fg: "#b45309", label: "Low confidence" },
+  INSUFFICIENT: { bg: "#fbe7e7", fg: "#b91c1c", label: "Insufficient confidence" },
+};
+
+function ConfidenceBadge({ confidence }: { confidence: string }) {
+  const style = CONFIDENCE_STYLE[confidence];
+  if (!style) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{ background: style.bg, color: style.fg }}
+    >
+      {style.label}
+    </span>
+  );
+}
 
 function ScoreRing({ score, color }: { score: number; color: string }) {
   const r = 30;
@@ -693,207 +668,6 @@ function CheckDot({ status }: { status: string }) {
   );
 }
 
-function RiskFactorCard({ rf }: { rf: RiskFactor }) {
-  const color = SEV[rf.severity] ?? "#78716c";
-  const confidence = Math.round((rf.confidence ?? 0) * 100);
-  return (
-    <li className="rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-          style={{ background: `${color}22`, color }}
-        >
-          {rf.severity}
-        </span>
-        <span className="text-sm font-semibold text-[#2b2318]">{rf.title}</span>
-        <span className="ml-auto flex items-center gap-3 text-xs text-[#6f6552]">
-          {rf.affected_urls > 0 && <span>{rf.affected_urls} affected</span>}
-          <span>{confidence}% confidence</span>
-        </span>
-      </div>
-      <div className="mt-2 space-y-1.5 text-sm">
-        {rf.explanation && <Detail label="Explanation" text={rf.explanation} />}
-        {rf.evidence && <Detail label="Evidence" text={rf.evidence} mono />}
-        {rf.impact && <Detail label="Impact" text={rf.impact} />}
-        {rf.recommendation && <Detail label="Fix" text={rf.recommendation} />}
-      </div>
-    </li>
-  );
-}
-
-/** How the scanner found this repo, in the user's words. */
-const REPO_SOURCE_LABEL: Record<string, string> = {
-  git_config: "Found in an exposed .git/config on the site",
-  package_json: "Found in the site's package.json",
-  composer_json: "Found in the site's composer.json",
-  security_txt: "Found in the site's security.txt",
-  humans_txt: "Found in the site's humans.txt",
-  page_link: "Linked from the site",
-  github_pages_dns: "Matched via GitHub Pages DNS",
-  github_search: "Matched by GitHub search",
-  user_supplied: "Repository you provided",
-};
-
-function repoSourceLabel(info: RepoInfo): string {
-  const how = REPO_SOURCE_LABEL[info.discovery_source ?? ""] ?? "Auto-discovered";
-  const confidence = info.verified
-    ? "confirmed"
-    : `${Math.round(info.confidence * 100)}% match confidence`;
-  return `${how} · ${confidence}`;
-}
-
-const SOURCE_ISSUE_LABEL: Record<string, string> = {
-  hardcoded_secret: "Hardcoded secret",
-  env_secret: "Secret in .env file",
-  sql_injection: "Possible SQL injection",
-  command_injection: "Possible command injection",
-  weak_crypto: "Weak hash function (MD5/SHA1)",
-};
-
-const SOURCE_ISSUE_FIX: Record<string, string> = {
-  hardcoded_secret:
-    "Rotate this credential, move it to an environment variable, and purge it from git history.",
-  env_secret:
-    "Rotate this credential and remove the .env file from the repository (add it to .gitignore).",
-  sql_injection:
-    "Use parameterised queries or an ORM instead of building SQL with string concatenation.",
-  command_injection:
-    "Avoid passing user input to shell execution; use an argument array and validate inputs.",
-  weak_crypto:
-    "Use SHA-256 or stronger; for passwords use bcrypt, scrypt, or Argon2.",
-};
-
-function SourceFindingCard({ sf, repoUrl }: { sf: SourceFinding; repoUrl: string }) {
-  const color = SEV[sf.severity] ?? "#78716c";
-  const label =
-    SOURCE_ISSUE_LABEL[sf.finding_type] ??
-    sf.finding_type.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-  const fix = SOURCE_ISSUE_FIX[sf.finding_type];
-  // GitHub and GitLab share the /blob/<ref>/<path>#L<n> shape.
-  const fileUrl = `${repoUrl}/blob/HEAD/${sf.file}#L${sf.line}`;
-
-  return (
-    <li className="rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-          style={{ background: `${color}22`, color }}
-        >
-          {sf.severity}
-        </span>
-        <span className="text-sm font-semibold text-[#2b2318]">{label}</span>
-        <span className="ml-auto text-xs text-[#6f6552]">{sf.confidence}</span>
-      </div>
-
-      <a
-        href={fileUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 block break-all font-mono text-xs text-[#6f6552] hover:underline"
-      >
-        {sf.file}:{sf.line}
-      </a>
-
-      {sf.code_context && (
-        <pre className="mt-2 overflow-x-auto rounded-md border border-[#d9cdb6] bg-[#26221b] px-3 py-2.5 text-xs leading-relaxed text-[#f0e9dc]">
-          <code>
-            <span className="mr-3 select-none text-[#8a8173]">{sf.line}</span>
-            {sf.code_context}
-          </code>
-        </pre>
-      )}
-
-      {sf.secret_type && sf.finding_type !== "hardcoded_secret" && (
-        <p className="mt-2 text-xs text-[#6f6552]">
-          Variable: <span className="font-mono">{sf.secret_type}</span>
-        </p>
-      )}
-      {fix && <p className="mt-2 text-sm text-[#4a4032]">{fix}</p>}
-    </li>
-  );
-}
-
-function DependencyRow({ sf }: { sf: SourceFinding }) {
-  const color = SEV[sf.severity] ?? "#78716c";
-  return (
-    <li className="flex flex-wrap items-center gap-2 rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] px-3 py-2">
-      <span
-        className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-        style={{ background: `${color}22`, color }}
-      >
-        {sf.severity}
-      </span>
-      <span className="font-mono text-sm text-[#2b2318]">
-        {sf.package}
-        {sf.version && `@${sf.version}`}
-      </span>
-      {sf.ecosystem && (
-        <span className="text-xs text-[#6f6552]">{sf.ecosystem}</span>
-      )}
-      {sf.advisory_id && (
-        <a
-          href={`https://osv.dev/vulnerability/${sf.advisory_id}`}
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto text-xs text-[#0369a1] hover:underline"
-        >
-          {sf.advisory_id}
-        </a>
-      )}
-    </li>
-  );
-}
-
-function TestRow({ test }: { test: TestResult }) {
-  if (test.status === "not_authorized") {
-    return (
-      <div className="flex items-center justify-between rounded-lg border border-[#e8d09a] bg-[#fdf3e3] px-3 py-2">
-        <span className="text-sm font-medium text-[#3a3122]">{test.name}</span>
-        <span
-          className="text-xs font-semibold text-[#b45309]"
-          title="Active tests send crafted payloads, so they only run on a site you have confirmed you own."
-        >
-          Not run — needs authorization
-        </span>
-      </div>
-    );
-  }
-  if (test.status === "not_applicable") {
-    return (
-      <div className="flex items-center justify-between rounded-lg border border-[#ece3d3] bg-[#f4efe6] px-3 py-2 opacity-70">
-        <span className="text-sm text-[#948972]">{test.name}</span>
-        <span className="text-xs text-[#b0a48c]">N/A</span>
-      </div>
-    );
-  }
-  if (test.status === "pass") {
-    return (
-      <div className="flex items-center justify-between rounded-lg border border-[#a7d3bf] bg-[#e7f4ec] px-3 py-2">
-        <span className="text-sm font-medium text-[#3a3122]">{test.name}</span>
-        <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0f7a52]">
-          ✓ Pass
-        </span>
-      </div>
-    );
-  }
-  const color = SEV[test.severity] ?? "#78716c";
-  return (
-    <div
-      className="flex items-center justify-between rounded-lg border px-3 py-2"
-      style={{ borderColor: `${color}55`, background: `${color}12` }}
-    >
-      <span className="text-sm font-medium text-[#3a3122]">{test.name}</span>
-      <span
-        className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
-        style={{ background: `${color}22`, color }}
-      >
-        {test.severity}
-        {test.count > 1 && <span className="opacity-80">×{test.count}</span>}
-      </span>
-    </div>
-  );
-}
-
 function FindingRow({ finding }: { finding: Finding }) {
   const [open, setOpen] = useState(false);
   const color = SEV[finding.severity] ?? "#78716c";
@@ -970,28 +744,8 @@ function buildReportHtml(
   snap: ScanSnapshot,
   findings: Finding[],
 ): string {
-  const aiOk = snap.ai_analyzed;
-  const riskLevel = aiOk ? snap.final_risk : "";
-  const riskScore = aiOk ? snap.risk_score : 0;
-
-  const factorRows = (snap.risk_factors ?? [])
-    .map((rf) => {
-      const color = SEV_HEX[rf.severity] ?? "#666";
-      const rows: string[] = [];
-      rows.push(
-        `<div class="kv"><b>Severity</b> ${esc(rf.severity)} · ${Math.round(
-          (rf.confidence ?? 0) * 100,
-        )}% confidence · ${rf.affected_urls} affected</div>`,
-      );
-      if (rf.explanation) rows.push(`<div class="kv"><b>Explanation</b> ${esc(rf.explanation)}</div>`);
-      if (rf.evidence) rows.push(`<div class="kv"><b>Evidence</b> <code>${esc(rf.evidence)}</code></div>`);
-      if (rf.impact) rows.push(`<div class="kv"><b>Impact</b> ${esc(rf.impact)}</div>`);
-      if (rf.recommendation) rows.push(`<div class="kv"><b>Fix</b> ${esc(rf.recommendation)}</div>`);
-      return `<div class="finding"><div class="fhead"><span class="sev" style="background:${color}">${esc(
-        rf.severity,
-      )}</span><span class="ftitle">${esc(rf.title)}</span></div>${rows.join("")}</div>`;
-    })
-    .join("");
+  const riskLevel = snap.final_risk ?? "";
+  const riskScore = snap.overall_risk ?? snap.risk_score ?? 0;
 
   const findingRows = findings
     .map((f) => {
@@ -1011,29 +765,31 @@ function buildReportHtml(
     })
     .join("");
 
-  const riskBadge = aiOk
-    ? `<span class="risk" style="background:${SEV_HEX[riskLevel] ?? "#059669"}">${esc(
-        riskLevel,
-      )} · ${riskScore}/100</span>`
-    : `<span class="risk" style="background:#8a8173">AI analysis unavailable</span>`;
+  const riskBadge = `<span class="risk" style="background:${
+    SEV_HEX[riskLevel] ?? "#8a8173"
+  }">${esc(riskLevel || "minimal")} · ${riskScore}/100</span>`;
 
-  const testRows = (snap.test_results ?? [])
-    .map((t) => {
-      let out: string;
-      if (t.status === "not_applicable") out = '<span style="color:#999">N/A</span>';
-      else if (t.status === "pass") out = '<span style="color:#0f7a52">✓ Pass</span>';
-      else {
-        const c = SEV_HEX[t.severity] ?? "#666";
-        out = `<span class="sev" style="background:${c}">${esc(t.severity)}${
-          t.count > 1 ? ` ×${t.count}` : ""
-        }</span>`;
-      }
-      return `<tr><td>${esc(t.name)}</td><td style="text-align:right">${out}</td></tr>`;
+  const COVERAGE_STATUS: Record<string, string> = {
+    NOT_APPLICABLE: '<span style="color:#999">N/A</span>',
+    NOT_TESTED: '<span style="color:#b45309">Not tested</span>',
+    INCONCLUSIVE: '<span style="color:#6d4fb8">Inconclusive</span>',
+    NOT_VULNERABLE: '<span style="color:#0f7a52">✓ Not vulnerable</span>',
+    VULNERABLE: '<span style="color:#b91c1c;font-weight:700">Vulnerable</span>',
+  };
+
+  const coverageRows = Object.values(snap.attack_coverage ?? {})
+    .map((a) => {
+      const out = COVERAGE_STATUS[a.status] ?? esc(a.status);
+      return `<tr><td>${esc(a.display)}</td><td style="text-align:center">${a.tested}/${a.eligible}</td><td style="text-align:right">${out}</td></tr>`;
     })
     .join("");
 
-  const repoRow = snap.repo_info
-    ? `<h2>Source Code Analysis</h2><div class="muted">Analyzed ${snap.repo_info.files_analyzed} files in <a href="${esc(snap.repo_info.url)}">${esc(snap.repo_info.owner)}/${esc(snap.repo_info.name)}</a> (${Math.round(snap.repo_info.confidence * 100)}% match confidence). Found ${snap.repo_info.source_findings_count} code issues and ${snap.repo_info.dependency_findings_count} dependency vulnerabilities.</div>`
+  const confidenceLine = snap.assessment_confidence
+    ? `<div class="muted">Confidence: ${esc(snap.assessment_confidence)}${
+        typeof snap.assessment_coverage === "number"
+          ? ` &nbsp;•&nbsp; Coverage: ${snap.assessment_coverage}%`
+          : ""
+      }${snap.assessment_warning ? ` &nbsp;•&nbsp; ${esc(snap.assessment_warning)}` : ""}</div>`
     : "";
 
   return `<!doctype html><html><head><meta charset="utf-8">
@@ -1059,15 +815,10 @@ function buildReportHtml(
   <h1>Website Security Assessment</h1>
   <div class="muted">${esc(target)} &nbsp;•&nbsp; ${new Date().toLocaleString()}</div>
   <div style="margin:14px 0">${riskBadge}</div>
+  ${confidenceLine}
   <div class="muted">${findings.length} findings &nbsp;•&nbsp; ${snap.urls_discovered} URLs &nbsp;•&nbsp; ${snap.apis_discovered} APIs &nbsp;•&nbsp; ${snap.parameters_discovered} params &nbsp;•&nbsp; ${snap.subdomains_discovered} subdomains &nbsp;•&nbsp; ${snap.requests_made} requests</div>
 
-  ${aiOk && snap.ai_summary ? `<h2>AI Security Summary</h2><div>${esc(snap.ai_summary)}</div>` : ""}
-  ${repoRow}
-  ${aiOk && factorRows ? `<h2>Risk Factors</h2>${factorRows}` : ""}
-  ${aiOk && snap.ai_recommendation ? `<h2>Overall Recommendation</h2><div>${esc(snap.ai_recommendation)}</div>` : ""}
-  ${!aiOk ? `<h2>AI Analysis</h2><div class="muted">${esc(snap.ai_error || "AI analysis unavailable.")}</div>` : ""}
-
-  ${testRows ? `<h2>Security Tests</h2><table class="tests">${testRows}</table>` : ""}
+  ${coverageRows ? `<h2>Attack Coverage</h2><table class="tests">${coverageRows}</table>` : ""}
 
   <h2>Findings (${findings.length})</h2>
   ${findingRows || '<div class="muted">No findings reported.</div>'}

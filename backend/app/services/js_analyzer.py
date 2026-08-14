@@ -46,6 +46,30 @@ _TEMPLATE_PATH_RE = re.compile(r"""[`"'](/[A-Za-z0-9._~\-/]*?)\$\{""")
 
 _SOURCE_MAP_RE = re.compile(r"//[#@]\s*sourceMappingURL=(\S+)")
 
+# Call-pattern candidates: fetch()/axios.*()/Angular HttpClient-shaped
+# `.get(`/`.post(`/`.put(`/`.delete(`/`.patch(` calls, and XMLHttpRequest.open,
+# whose first (or second, for .open) argument is an *absolute* URL literal —
+# the plain path-literal regex above only catches leading-"/" strings, so a
+# bundle that calls a different origin (`fetch("https://api.example.com/x")`)
+# needs this pattern instead. Still just a candidate: verified below like
+# every other extracted path.
+_ABS_CALL_RE = re.compile(
+    r"""(?:fetch|axios\.(?:get|post|put|delete|patch)|\.open)\s*\(\s*"""
+    r"""(?:["'][A-Za-z]+["']\s*,\s*)?["'`](https?://[A-Za-z0-9._~\-/:%]{4,160})["'`]"""
+)
+
+# A GraphQL operation string literal (`query { ... }` / `mutation Foo(...)`).
+# Presence implies a /graphql endpoint even if no literal "/graphql" string
+# appears elsewhere in the bundle.
+_GRAPHQL_OP_RE = re.compile(r"""[`"'\s](?:query|mutation)\s+\w""", re.IGNORECASE)
+
+# `new WebSocket("wss://...")` — discovery-only (Part 3's explicit scope-down
+# for full WS protocol fuzzing); collected so callers can at least record the
+# endpoint exists.
+_WEBSOCKET_CALL_RE = re.compile(
+    r"""new\s+WebSocket\s*\(\s*["'`](wss?://[A-Za-z0-9._~\-/:%]{4,160})["'`]"""
+)
+
 # Static assets and framework noise — never endpoints.
 _ASSET_EXTENSIONS = (
     ".js", ".mjs", ".cjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif",
@@ -84,6 +108,7 @@ class JsAnalysisResult:
     paths_extracted: int = 0
     paths_confirmed: int = 0
     source_maps_found: list[str] = field(default_factory=list)
+    websocket_urls: set[str] = field(default_factory=set)
 
 
 def _is_noise(path: str) -> bool:
@@ -114,7 +139,18 @@ def extract_paths(js: str) -> set[str]:
         candidate = match.group(1).rstrip("/")
         if candidate:
             found.add(candidate)
+    for match in _ABS_CALL_RE.finditer(js):
+        path = urlsplit(match.group(1)).path
+        if path:
+            found.add(path)
+    if _GRAPHQL_OP_RE.search(js):
+        found.add("/graphql")
     return {p for p in found if not _is_noise(p)}
+
+
+def extract_websocket_urls(js: str) -> set[str]:
+    """Discovery-only: `new WebSocket(...)` literals found in a bundle."""
+    return {match.group(1) for match in _WEBSOCKET_CALL_RE.finditer(js)}
 
 
 def _rank(path: str) -> tuple[int, int]:
@@ -149,6 +185,7 @@ async def analyze_bundles(
             continue
         result.bundles_analyzed += 1
         candidate_paths |= extract_paths(body)
+        result.websocket_urls |= extract_websocket_urls(body)
 
         match = _SOURCE_MAP_RE.search(body[-2048:] or body)
         if match:

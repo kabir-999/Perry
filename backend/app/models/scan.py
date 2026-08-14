@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from app.models.target import Target
     from app.models.endpoint import Subdomain, DiscoveredEndpoint
     from app.models.report import Report
-    from app.models.repository import Repository, SourceFinding
     from app.models.finding import Finding
 
 
@@ -63,23 +62,17 @@ class Scan(Base):
     # Fast-scan cache (avoids re-fetching the homepage in deep scan)
     fast_scan_homepage_text: Mapped[str] = mapped_column(Text, default="")
     fast_scan_homepage_url: Mapped[str] = mapped_column(String(2048), default="")
-    
-    # Repository analysis info (JSON serialized)
-    repo_info_json: Mapped[str] = mapped_column(Text, default="")
-    # Optional user-supplied GitHub/GitLab repo. When set, it is analyzed
-    # directly instead of relying on auto-discovery from the site.
-    repo_url: Mapped[str] = mapped_column(String(2048), default="")
     # Read-only scan: no active injection payloads were sent. Set when the
     # user did not confirm authorization for the target.
     passive_only: Mapped[bool] = mapped_column(default=False)
-    # User-defined custom test cases for this scan (JSON list of
-    # CustomTestCase), only ever executed when the scan runs active tests.
-    custom_test_cases_json: Mapped[str] = mapped_column(Text, default="")
-    # LOCAL_CODE | CI_CD | AUTHORIZED_DEPLOYMENT | PASSIVE_WEB
+    # Opt-in: attach the target's saved VerifiedTarget.auth_header (the
+    # scanner's own test-account session) while crawling/testing. Never
+    # triggers self-registration or a login attempt — see auth_discovery.py.
+    authenticated_scan: Mapped[bool] = mapped_column(default=False)
+    # AUTHORIZED_DEPLOYMENT | PASSIVE_WEB
     scan_type: Mapped[str] = mapped_column(String(32), default="PASSIVE_WEB")
     # Verification state of the target at the time the scan ran.
     authorization_status: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")
-    final_risk: Mapped[str] = mapped_column(String(16), default="")
 
     # Deep-scan progress (0-100) and running discovery/finding counters.
     deep_progress: Mapped[int] = mapped_column(Integer, default=0)
@@ -90,28 +83,26 @@ class Scan(Base):
     security_checks_completed: Mapped[int] = mapped_column(Integer, default=0)
     findings_count: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Human-readable AI-analysis status line for the live view.
+    # Live status line for the deep-scan view.
     ai_status: Mapped[str] = mapped_column(String(128), default="")
     # Which deep-scan check groups have finished (JSON list of labels).
     checks_done_json: Mapped[str] = mapped_column(Text, default="")
 
-    # --- Overall assessment shown on the single Scan Detail page ---
-    # Whether the Groq analyst produced a validated assessment. Risk score /
-    # level are authoritative ONLY when this is true.
-    ai_analyzed: Mapped[bool] = mapped_column(default=False)
-    # User-facing reason when AI analysis is unavailable (never internals).
-    ai_error: Mapped[str] = mapped_column(Text, default="")
-    # 0-100 overall risk score — set only by the AI analyst (0 when unavailable).
+    # --- Deterministic assessment (5-factor risk; no AI, no CVSS aggregation) ---
+    # Overall risk = highest confirmed finding's 5-factor score (0-100), and
+    # the level derived from it. Coverage never modifies these.
     risk_score: Mapped[int] = mapped_column(Integer, default=0)
-    # AI Security Analyst narrative (empty if the analyst was not run).
-    ai_summary: Mapped[str] = mapped_column(Text, default="")
-    ai_recommendation: Mapped[str] = mapped_column(Text, default="")
-    # Groq risk factors + severity statistics, serialized as JSON.
-    risk_factors_json: Mapped[str] = mapped_column(Text, default="")
-    # Full security-test matrix (every test + outcome), serialized as JSON.
-    test_results_json: Mapped[str] = mapped_column(Text, default="")
-    # Sentinel Risk Model v1 output: score, band, and contributors.
-    sentinel_risk_json: Mapped[str] = mapped_column(Text, default="")
+    final_risk: Mapped[str] = mapped_column(String(16), default="")
+    overall_risk: Mapped[int] = mapped_column(Integer, default=0)
+    assessment_confidence: Mapped[str] = mapped_column(String(32), default="")
+    assessment_coverage: Mapped[int] = mapped_column(Integer, default=0)
+    assessment_warning: Mapped[str] = mapped_column(Text, default="")
+
+    # Per-(endpoint,parameter,attack) test matrix + per-attack coverage +
+    # crawl coverage — all serialized as JSON.
+    attack_matrix_json: Mapped[str] = mapped_column(Text, default="")
+    attack_coverage_json: Mapped[str] = mapped_column(Text, default="")
+    coverage_json: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -128,12 +119,6 @@ class Scan(Base):
         back_populates="scan", cascade="all, delete-orphan"
     )
     report: Mapped["Report"] = relationship(
-        back_populates="scan", cascade="all, delete-orphan"
-    )
-    repositories: Mapped[list["Repository"]] = relationship(
-        back_populates="scan", cascade="all, delete-orphan"
-    )
-    source_findings_rel: Mapped[list["SourceFinding"]] = relationship(
         back_populates="scan", cascade="all, delete-orphan"
     )
     findings: Mapped[list["Finding"]] = relationship(

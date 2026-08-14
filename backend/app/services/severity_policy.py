@@ -21,14 +21,16 @@ from __future__ import annotations
 
 import re
 
-from app.services.reachability import (
-    CONFIRMED_EXPLOITABLE,
-    DEPENDENCY_PRESENT,
-    FUNCTIONALITY_USED,
-    POTENTIALLY_EXPLOITABLE,
-    REACHABLE_FROM_INPUT,
-)
 from app.services.finding_types import FindingCandidate
+
+# Dependency-reachability classification labels. Retained as local constants
+# (source-code/dependency analysis was removed) so the severity-capping ladder
+# stays intact for any finding that still carries an exploitability label.
+DEPENDENCY_PRESENT = "dependency_present"
+FUNCTIONALITY_USED = "functionality_used"
+REACHABLE_FROM_INPUT = "reachable_from_input"
+POTENTIALLY_EXPLOITABLE = "potentially_exploitable"
+CONFIRMED_EXPLOITABLE = "confirmed_exploitable"
 
 _SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"]
 

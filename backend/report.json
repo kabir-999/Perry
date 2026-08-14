@@ -99,7 +99,7 @@
       "category": "dependency_vulnerability",
       "category_display": "Dependency Vulnerability",
       "location": "",
-      "evidence": "Package: mongoose 7.8.7 (npm)\nDependency type: direct production\nAdvisory: GHSA-664h-wqgq-64gw\nVulnerable range: >=7.0.0, <7.8.10\nPatched version: 7.8.10\nPackage imported: yes\nVulnerable functionality named by advisory: $parentSchemaDocArray, Object.prototype, __proto__, $fullPath\nVulnerable functionality used: no\nReachable from attacker-controlled input: no path found",
+      "evidence": "Package: mongoose 7.8.7 (npm)\nDependency type: direct production\nAdvisory: GHSA-664h-wqgq-64gw\nVulnerable range: >=7.0.0, <7.8.10\nPatched version: 7.8.10\nPackage imported: yes\nVulnerable functionality named by advisory: $parentSchemaDocArray, Object.prototype, $fullPath, prototype\nVulnerable functionality used: no\nReachable from attacker-controlled input: no path found",
       "remediation": "Upgrade mongoose from 7.8.7 to 7.8.10."
     },
     {

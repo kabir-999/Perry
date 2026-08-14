@@ -22,7 +22,8 @@ class DiscoveredPath:
 class DiscoveredParam:
     url: str
     name: str
-    param_type: str = "query"  # query | form
+    # query | form | json | path | header | cookie | multipart | graphql_variable
+    param_type: str = "query"
     example_value: str = ""
     method: str = "GET"
 
@@ -64,3 +65,58 @@ class CrawlResult:
     # In-scope <script src> URLs. On a single-page app the real attack surface
     # lives inside these bundles, not in the page's links.
     script_urls: set[str] = field(default_factory=set)
+
+
+@dataclass
+class DiscoveredNetworkRequest:
+    """One request captured directly off the browser's network layer during
+    a browser_crawler.py run — this is *behavioral* discovery: Sentinel saw
+    the browser actually make this call, regardless of whether it came from
+    fetch(), XMLHttpRequest, axios, Angular HttpClient, or anything else,
+    since they all funnel through the same browser network stack. Never
+    classified as an API by string-matching the URL — see
+    network_classifier.py, which uses `resource_type` + response
+    content-type instead."""
+
+    method: str
+    url: str
+    origin: str
+    path: str
+    query: dict[str, str] = field(default_factory=dict)
+    headers: dict[str, str] = field(default_factory=dict)
+    body: str = ""
+    content_type: str = ""
+    response_status: int | None = None
+    response_headers: dict[str, str] = field(default_factory=dict)
+    response_content_type: str = ""
+    # Playwright's own request classification: "document" | "xhr" | "fetch"
+    # | "script" | "stylesheet" | "image" | "font" | "websocket" | ... — the
+    # primary signal network_classifier.py uses, precisely because it comes
+    # from the browser's own behavior, not a URL guess.
+    resource_type: str = ""
+    source_page: str = ""  # the page URL that triggered this request
+    is_authenticated: bool = False  # sent with the scanner's own credential
+
+    def key(self) -> str:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(self.url)
+        return f"{self.method.upper()}:{parts.netloc.lower()}{parts.path.rstrip('/')}"
+
+
+@dataclass
+class BrowserCrawlResult:
+    """Everything a real-browser crawl produced — additive to (never a
+    replacement for) the static crawler.CrawlResult."""
+
+    pages: list[DiscoveredPath] = field(default_factory=list)
+    network_requests: list[DiscoveredNetworkRequest] = field(default_factory=list)
+    forms: list[DiscoveredForm] = field(default_factory=list)
+    params: list[DiscoveredParam] = field(default_factory=list)
+    js_bundle_urls: set[str] = field(default_factory=set)
+    websocket_urls: set[str] = field(default_factory=set)
+    # Client-side (JS-rendered) routes discovered only by navigating/
+    # clicking through the app — a static HTML parse would never see these.
+    spa_routes: set[str] = field(default_factory=set)
+    pages_rendered: int = 0
+    errors: list[str] = field(default_factory=list)
