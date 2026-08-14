@@ -18,7 +18,6 @@ function Splash() {
 
 /** Blocks a route until signed in, and optionally until the role matches. */
 function Guard({
-  role,
   children,
 }: {
   role?: UserRole;

@@ -54,15 +54,16 @@ export default function Login() {
     setError(null);
     setSubmitting(true);
     try {
-      const user =
-        mode === "login"
-          ? await login({ email: email.trim(), password })
-          : await signup({
-              email: email.trim(),
-              password,
-              display_name: displayName.trim(),
-              role: "developer",
-            });
+      if (mode === "login") {
+        await login({ email: email.trim(), password });
+      } else {
+        await signup({
+          email: email.trim(),
+          password,
+          display_name: displayName.trim(),
+          role: "developer",
+        });
+      }
       navigate("/", { replace: true });
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
