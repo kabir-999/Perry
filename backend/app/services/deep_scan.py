@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from app.config import settings
-from app.services import active_engine, security_checks
+from app.services import active_engine, attack_logger, security_checks
 from app.services.api_discovery import discover_apis
 from app.services.assessment import compute_assessment
 from app.services.attacks import catalog as C
@@ -82,6 +82,11 @@ class DeepScanResult:
     attack_coverage: dict = field(default_factory=dict)
     coverage: dict = field(default_factory=dict)
 
+    # Production-grade structured JSON logs for every attack attempt
+    # (success, clean, skipped, inconclusive, or errored) — persisted and
+    # rendered under each attack's box in the UI.
+    attack_logs: list[dict] = field(default_factory=list)
+
     # Deterministic risk (5-factor); overall = highest confirmed finding.
     overall_risk: int = 0
     risk_score: int = 0
@@ -118,6 +123,10 @@ async def run_deep_scan(
         max_response_bytes=settings.DEFAULT_MAX_RESPONSE_BYTES,
     )
     result = DeepScanResult()
+
+    # Install the per-scan structured attack-log collector on this async
+    # context, so every attack runner's records are attributed to this scan.
+    attack_log = attack_logger.start_collector()
 
     async def check():
         if is_cancelled():
@@ -272,6 +281,7 @@ async def run_deep_scan(
         # --- Test matrix + coverage (§21/§22/§23) ---
         result.attack_matrix = build_test_matrix(executions, inv)
         result.attack_coverage = per_attack_coverage(plan, executions)
+        result.attack_logs = list(attack_log.records)
         cov = compute_coverage(inv, executions)
         result.coverage = cov.to_dict()
         debug_log("COVERAGE", f"ratio={cov.coverage_ratio} tested={cov.security_tests_executed} "
