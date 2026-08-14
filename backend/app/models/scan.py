@@ -103,6 +103,10 @@ class Scan(Base):
     attack_matrix_json: Mapped[str] = mapped_column(Text, default="")
     attack_coverage_json: Mapped[str] = mapped_column(Text, default="")
     coverage_json: Mapped[str] = mapped_column(Text, default="")
+    # Production-grade structured JSON logs for every attack attempt (one
+    # record per test — vulnerable, clean, skipped, inconclusive, or errored),
+    # serialized as a JSON array. Rendered under each attack's box in the UI.
+    attack_logs_json: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
