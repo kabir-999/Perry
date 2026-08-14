@@ -109,6 +109,7 @@ async def run_deep_scan(
     passive_only: bool = False,
     auth_header: str | None = None,
     auth_header_b: str | None = None,
+    rate_limit_per_second: float = 0,
 ) -> DeepScanResult:
     client = build_async_client(
         timeout=settings.DEEP_REQUEST_TIMEOUT_SECONDS,
@@ -121,6 +122,7 @@ async def run_deep_scan(
         concurrency=settings.DEEP_CONCURRENCY,
         request_budget=settings.DEEP_MAX_REQUESTS,
         max_response_bytes=settings.DEFAULT_MAX_RESPONSE_BYTES,
+        rate_limit_per_second=rate_limit_per_second,
     )
     result = DeepScanResult()
 

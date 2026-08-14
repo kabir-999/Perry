@@ -4,7 +4,12 @@ Shared async HTTP layer for the scanner.
 Everything that makes a request goes through `Fetcher`, which provides:
 
   * one pooled, keep-alive ``httpx.AsyncClient`` (connection reuse)
-  * bounded concurrency via a semaphore (never unbounded task fan-out)
+  * bounded concurrency via a semaphore (never unbounded task fan-out) —
+    caps how many requests are in flight at once
+  * a token-bucket rate limit (optional, ``rate_limit_per_second``) — caps
+    how many requests actually egress per second, independent of
+    concurrency; a high concurrency cap with fast responses can otherwise
+    still burst well past a target's tolerance
   * a per-scan request budget (hard ceiling on total requests)
   * response-size caps enforced by streaming (never download huge bodies)
   * request de-duplication (identical GETs are fetched once)
@@ -12,7 +17,9 @@ Everything that makes a request goes through `Fetcher`, which provides:
   * no exceptions leaking to callers — failures come back as a
     ``FetchResult`` with ``error`` set.
 
-None of this is user-configurable; the scan orchestrator picks safe values.
+Concurrency/budget/timeouts are the scan orchestrator's own safe defaults;
+the rate limit is the one dial a user can actually set (``ScanCreate.
+rate_limit_per_second``), defaulting to unthrottled (0) when unset.
 """
 from __future__ import annotations
 
@@ -95,9 +102,40 @@ def build_async_client(
     )
 
 
+class _TokenBucket:
+    """Requests-per-second throttle, independent of the concurrency
+    semaphore. Tokens refill continuously (fractional, based on elapsed
+    wall-clock time) rather than in fixed per-second ticks, so throughput is
+    smoothed rather than steppy. ``rate_per_second <= 0`` disables the
+    bucket entirely — ``acquire()`` returns immediately, no lock taken.
+    """
+
+    def __init__(self, rate_per_second: float) -> None:
+        self._rate = rate_per_second
+        self._capacity = max(1.0, rate_per_second)
+        self._tokens = self._capacity
+        self._updated = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        if self._rate <= 0:
+            return
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                elapsed = now - self._updated
+                self._updated = now
+                self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                wait = (1.0 - self._tokens) / self._rate
+            await asyncio.sleep(wait)
+
+
 class Fetcher:
-    """Concurrency-bounded, budgeted, de-duplicating request runner over a
-    single shared AsyncClient."""
+    """Concurrency-bounded, budgeted, rate-limited, de-duplicating request
+    runner over a single shared AsyncClient."""
 
     def __init__(
         self,
@@ -106,11 +144,13 @@ class Fetcher:
         concurrency: int,
         request_budget: int,
         max_response_bytes: int,
+        rate_limit_per_second: float = 0,
     ) -> None:
         self._client = client
         self._sem = asyncio.Semaphore(max(1, concurrency))
         self._budget = request_budget
         self._max_bytes = max_response_bytes
+        self._bucket = _TokenBucket(rate_limit_per_second)
         self._cache: dict[tuple[str, str, bool], FetchResult] = {}
         self._lock = asyncio.Lock()
         self.requests_made = 0
@@ -153,6 +193,7 @@ class Fetcher:
                 )
             self.requests_made += 1
 
+        await self._bucket.acquire()
         result = await self._do_fetch(
             url, method, follow_redirects, headers, json, data, files
         )
