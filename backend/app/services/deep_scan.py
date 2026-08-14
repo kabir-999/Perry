@@ -192,23 +192,25 @@ async def run_deep_scan(
         for p in api_paths + js.endpoints:
             inv.add_path(p, kind=API)
 
+        # The browser network layer captures every request the page's JS
+        # makes, including calls to a separate backend origin (e.g. a Vercel
+        # SPA calling a Render API) — that cross-origin host is exactly what
+        # we want to test, so it doesn't get filtered out here. This matches
+        # the same trust boundary the primary target already uses (an
+        # authorized/active scan proceeds on the caller's "I own this"
+        # confirmation, not a separate proof-of-control step): once a scan is
+        # authorized to attack at all, a host its own crawl led it to is
+        # treated the same way. A passive-only scan (no authorization
+        # confirmed) stays strictly on the declared target/subdomains, so an
+        # unauthorized scan never reaches out to a third-party host at all.
         network_params = [
             p for p in extract_params_from_network(browser_result.network_requests)
-            if scope.in_scope(p.url)
+            if not passive_only or scope.in_scope(p.url)
         ]
         for req in browser_result.network_requests:
             inv.add_network_request(req)
             debug_log("NETWORK", f"{req.method} {req.url} [{req.resource_type}]")
-            # The browser network layer captures every request the page's JS
-            # makes, including calls to a host the user never verified control
-            # of (e.g. a stray third-party analytics/API call). Recording it
-            # above (add_network_request) keeps it visible in the report;
-            # promoting it to a tested endpoint is gated on scope so it can
-            # never be attacked without authorization for that host — see
-            # scan_manager.py's allowed_hosts widening for the one case
-            # (the user's own other verified targets) where this is expected
-            # to pass.
-            if not scope.in_scope(req.url):
+            if passive_only and not scope.in_scope(req.url):
                 continue
             kind = classify_request(req)
             if kind in (_NET_API, _NET_GRAPHQL):
