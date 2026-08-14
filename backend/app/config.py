@@ -112,6 +112,23 @@ class Settings(BaseSettings):
     HTTP_MAX_CONNECTIONS: int = 48
     HTTP_MAX_KEEPALIVE: int = 24
 
+    # --- Browser-based crawling (JS/SPA discovery) ---
+    # Off by default only in the sense that it degrades gracefully if
+    # Chromium isn't installed — when available it always runs, additive
+    # to the static crawler, never a replacement for it.
+    BROWSER_CRAWL_MAX_PAGES: int = 15
+    BROWSER_CRAWL_MAX_DEPTH: int = 2
+    BROWSER_NAV_TIMEOUT_SECONDS: float = 12.0
+    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 5.0
+    # A separate, smaller budget than DEEP_MAX_REQUESTS — browser-driven
+    # navigation/clicks can fan out fast, and this is a different cost
+    # profile (a real browser tab) than a pooled httpx request.
+    BROWSER_MAX_REQUESTS: int = 150
+
+    # --- Debug mode (Part 18): bracketed-tag trace of what was discovered/
+    # tested and why, at logging.DEBUG. Zero cost when off.
+    SCAN_DEBUG: bool = False
+
     # A neutral, honest User-Agent. Not spoofed to evade detection.
     SCANNER_USER_AGENT: str = "WebFuzzer/0.2 (authorized-security-assessment)"
 

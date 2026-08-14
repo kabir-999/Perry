@@ -3,18 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { scansApi } from "../services/api";
 import { AUTHORIZATION_STATEMENT } from "../types";
 import { ACCENT_CYCLE } from "../theme";
-import { useAuth } from "../contexts/AuthContext";
 
 const CAPABILITIES = [
   "Crawling & attack surface",
   "API & subdomain discovery",
   "XSS · SQLi · traversal probes",
-  "Source code & dependency scan",
-  "AI risk assessment",
+  "12 attack modules",
+  "Deterministic risk scoring",
 ];
-
-const REPO_URL_RE =
-  /^(?:https?:\/\/)?(?:www\.)?(?:github|gitlab)\.com\/[\w.-]+\/[\w.-]+\/?$/i;
 
 // Why a developer should run this before shipping.
 const BENEFITS = [
@@ -38,11 +34,8 @@ const BENEFITS = [
 
 export default function NewScan() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const isDeveloper = user?.role === "developer";
 
   const [targetUrl, setTargetUrl] = useState("");
-  const [repoUrl, setRepoUrl] = useState("");
   const [authorized, setAuthorized] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,13 +43,6 @@ export default function NewScan() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const repo = repoUrl.trim();
-    if (repo && !REPO_URL_RE.test(repo)) {
-      setError(
-        "Enter a repository URL like https://github.com/owner/repo, or leave it blank.",
-      );
-      return;
-    }
     setSubmitting(true);
     try {
       // Scope, modules, concurrency, and limits are all chosen automatically.
@@ -67,7 +53,6 @@ export default function NewScan() {
         // Confirming ownership unlocks the active injection tests; without
         // it the same pipeline runs read-only.
         ...(authorized ? { authorization_statement: AUTHORIZATION_STATEMENT } : {}),
-        ...(repo ? { repo_url: repo } : {}),
       });
       navigate(`/scans/${scan.id}`);
     } catch (err: any) {
@@ -114,24 +99,6 @@ export default function NewScan() {
           placeholder="https://example.com"
           className="w-full rounded-lg border border-[#d6c9b0] bg-[#f4efe6] px-4 py-3 text-base text-[#2b2318] outline-none transition-colors focus:border-[#c2410c]"
         />
-
-        {isDeveloper && (<><label className="mb-1.5 mt-4 block text-sm font-medium text-[#4a4032]">
-          GitHub repository{" "}
-          <span className="font-normal text-[#6f6552]">(optional)</span>
-        </label>
-        <input
-          type="text"
-          value={repoUrl}
-          onChange={(e) => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/owner/repo"
-          className="w-full rounded-lg border border-[#d6c9b0] bg-[#f4efe6] px-4 py-3 text-base text-[#2b2318] outline-none transition-colors focus:border-[#c2410c]"
-        />
-        <p className="mt-1.5 text-xs text-[#6f6552]">
-          Adds source-code analysis: hardcoded secrets, injection patterns, and
-          vulnerable dependencies, each reported with the exact file and line.
-          Must be a public repo. Leave blank to skip source analysis entirely —
-          we won't look for a repository on your behalf.
-        </p></>)}
 
         <label className="mt-4 flex items-start gap-3 rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] p-3.5 text-sm text-[#4a4032]">
           <input

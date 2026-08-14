@@ -1,106 +1,135 @@
 # Sentinel — Web Application Security Scanner
 
-A full-stack platform for **authorized security assessments**. A user
-registers a target, proves ownership of it, and gets:
+A full-stack platform for **authorized security assessments** of live web
+applications. A user registers a target and gets:
 
 1. A **fast preliminary result** (~1-2s) on submission.
-2. A **deep automated assessment** running in the background — discovery,
-   active testing, passive/config checks, and (if a repo is linked) static
-   source-code analysis — streamed live over SSE.
-3. A deterministic **Sentinel Risk Model v1** score (CVSS v4.0 for real
-   vulnerabilities, a dedicated 0–100 hardening scale for configuration
-   weaknesses) plus one Groq LLM call that explains — never invents or
-   re-scores — the findings.
+2. A **deep automated assessment** running in the background — one
+   centralized crawler (static + real-browser) feeds one Attack Surface
+   Inventory, a Test Planner maps the discovered surface to the 12 in-scope
+   attacks, the attack modules run, and results stream live over SSE.
+3. A deterministic **5-factor risk score** (overall risk = the highest
+   confirmed finding's score), reported alongside — but never blended with —
+   an independent **assessment confidence** and **coverage** percentage.
 
-It also ships a **CLI** (`app/cli.py`) that runs the same secret/SAST/
-dependency scan and the same risk model against a local checkout, with
-severity/risk gates suitable for a CI/CD pipeline — no network target, no
-web UI required.
+Sentinel is a purely **dynamic** web scanner: there is no AI/LLM layer and no
+source-code (SAST/secret/dependency) analysis — risk and every status come
+solely from deterministic, evidence-based tests.
 
 > **Scope**: only scan applications you own, applications you have explicit
 > written authorization to test, local test apps, or intentionally
-> vulnerable training apps. Active testing (crafted payloads) additionally
-> requires proving ownership of the target host — see
-> [Target Ownership Verification](#target-ownership-verification).
+> vulnerable training apps. Active testing (crafted payloads) requires
+> confirming authorization for the target.
 
 ```text
-Web pipeline:
-  Target registration → Ownership verification → Fast Scan → Deep Scan
-    (Discovery · Active Testing · Passive Checks · Repo Analysis)
-    → Sentinel Risk Model → Groq LLM Analyst → Report
-
-CLI / CI-CD pipeline:
-  Local checkout → Secrets · SAST · Dependency/OSV scan
-    → Sentinel Risk Model → Severity/Risk gate → exit code
+Target → Scope validation → Static discovery → Browser/JS execution →
+  Dynamic crawling → Network interception → ATTACK SURFACE INVENTORY →
+  Authentication discovery → TEST PLANNER → 12 attack modules →
+  Evidence validation → Finding dedup → 5-factor risk scoring →
+  Coverage → Report
 ```
+
+## The 12 in-scope attacks
+
+These are the **only** active security tests this version performs.
+
+**MUST**: SQL Injection · Cross-Site Scripting (XSS) · Path Traversal ·
+Open Redirect · Security Misconfiguration · Sensitive Information Disclosure ·
+Authentication & Authorization.
+
+**ADVANCED**: API Authentication · HTTP Parameter Pollution · File Upload ·
+VHost Isolation · Subdomain Takeover.
+
+The architecture is modular (an `attacks/` registry keyed by the 12 canonical
+names + a central Test Planner) so more attacks can be added later without
+touching the crawler — but nothing outside this list runs today (no NoSQL,
+command injection, SSRF, XXE, SSTI, CSRF, deserialization, standalone CORS,
+GraphQL/WebSocket-specific attacks, etc.).
 
 ## What It Actually Does
 
-- **Discovery**: bounded crawler, directory/sensitive-file wordlists,
-  OpenAPI/Swagger + common API path discovery, parameter discovery,
-  subdomain DNS enumeration, Host-header virtual-host discovery — all
-  guarded against wildcard DNS and soft-404/SPA-fallback false positives.
-- **Active testing** (only against a verified target): a unified engine
-  (`ParamTarget → PayloadStrategy → RequestBuilder → ResponseDiff`) for
-  reflected XSS, SQL/NoSQL injection, command injection, path traversal,
-  open redirect, and HTTP parameter pollution — adaptive, not brute-forced.
-  API-discovered parameters run through this same engine, not just
-  crawler-discovered ones. Path traversal also runs against file-shaped
-  discovered directory/file paths directly, not only URL parameters.
-  Path-traversal and command-injection payloads escalate to a few
-  URL-encoded/double-encoded/unicode-overlong variants, but only after the
-  plain payload came back negative and only where byte-level encoding is
-  meaningful (query/form values, not JSON bodies or headers).
-- **File upload testing**: discovered upload endpoints are actually probed
-  with harmless canary files (never executable content) to check whether a
-  disallowed extension or a path-traversal-shaped filename is accepted, and
-  — only if Sentinel can fetch back its own canary — whether the uploaded
-  content is served back at all. A bare "upload endpoint exists" is never
-  itself reported as a vulnerability.
-- **Authentication/authorization testing**: a developer-supplied test
-  credential (set via `POST /api/targets/{id}/credential`, never logged or
-  returned) lets Sentinel compare an authenticated vs. unauthenticated
-  request to the same sensitive-looking endpoint. Without a credential, this
-  is reported as explicitly **inconclusive** in the test matrix — never
-  assumed safe or vulnerable. This is a heuristic differential check with
-  one identity, not a real IDOR/BOLA proof; true IDOR detection only fires
-  when the same scan happens to observe two distinct concrete IDs for the
-  same parameter (rare — the crawler intentionally collapses ID variation
-  during discovery), and reports inconclusive otherwise.
-- **User-defined custom test cases**: a scan can include up to 20 ad hoc
-  tests (name, path, method, input location, payload, validation condition,
-  severity), executed through the exact same request/response/evidence
-  pipeline as every built-in active test — scope-checked, budget-shared,
-  and severity-capped the same way. Kept separate from the static wordlists.
-- **Independent subdomain assessment**: up to a handful of resolved,
-  reachable subdomains (bounded, sharing the scan's one request budget) get
-  their own not-found baseline, passive header/cookie/CORS checks, and a
-  small API/active pass — not just DNS discovery reused as VHost-probe
-  candidates. A DNS record alone is never a finding.
-- **Passive checks**: security headers, cookie flags, CORS, server-version
-  disclosure, directory listing, debug/stack-trace leakage, unauthenticated
-  sensitive API endpoints.
-- **Source-code analysis** (if a public repo is linked or supplied): secret
-  detection (env files + hardcoded, git-tracking aware — see below),
-  AST-based taint analysis (SAST), and dependency scanning against OSV.dev
-  with strict semver-range validation and *reachability* analysis (is the
-  vulnerable symbol actually imported and reachable from attacker input, or
-  just present in a manifest?).
-- **Correlation**: a source-code finding and a live endpoint it backs are
-  matched by route-segment/filename token and merged into one scored issue
-  instead of two.
-- **Risk scoring**: deterministic, auditable, CVSS v4.0 + hardening-model
-  based — see [ARCHITECTURE.md](./ARCHITECTURE.md#sentinel-risk-model-v1).
-- **Remediation verification**: each finding carries a fingerprint stable
-  across scans of the same target. A report compares against the target's
-  last two completed scans and marks each finding `OPEN`, `REGRESSED`
-  (fixed, then came back), or `UNVERIFIED` (no scan history yet), plus a
-  count of issues fixed since the last scan. Never touches source code.
-- **AI layer**: exactly one Groq call per scan, strict Pydantic-validated
-  output, explains the deterministic findings — it does not invent evidence
-  or set severity.
-- **CLI/CI-CD mode**: the same secret/SAST/dependency/risk pipeline, run
-  locally or in a pipeline, gated on severity and/or risk-score thresholds.
+- **Discovery**: a bounded static (BeautifulSoup) crawler *plus* a real
+  headless-Chromium browser crawler (`playwright install chromium`,
+  degrades gracefully if not installed) that renders JS-heavy SPAs
+  (Angular/React/Vue) the way a real user's browser would, discovering
+  client-side routes a static HTML parse never sees. Every request the
+  rendered page's own JS makes — `fetch`/XHR/axios/Angular `HttpClient`, all
+  funneling through the same browser network layer — is captured and
+  classified as an API/GraphQL/page/asset/WebSocket call **behaviorally**
+  (Playwright's own `resource_type` + response content-type), never by
+  matching a `/api/`-shaped URL string. JS bundles are additionally mined
+  for `fetch(...)`/`axios.*(...)`/`new WebSocket(...)`/GraphQL operation
+  literals as endpoint *candidates*, each verified live before being
+  reported. Parameters are discovered from query strings, form fields, JSON
+  bodies, path-shaped id segments, GraphQL `variables`, and non-standard
+  headers/cookies observed in captured traffic — not just query/form pairs.
+  Directory/sensitive-file wordlists, OpenAPI/Swagger + common API path
+  discovery, subdomain DNS enumeration, and Host-header virtual-host
+  discovery all still run as before — guarded against wildcard DNS and
+  soft-404/SPA-fallback false positives.
+- **Authentication surface detection**: login/register/logout/password-reset
+  forms, session cookies, and bearer/JWT-shaped tokens are detected from
+  discovered pages/forms/network traffic (never by attempting a login).
+  `Authentication/Authorization` reports `NOT_APPLICABLE` only when no such
+  surface was found at all — distinct from `NOT_TESTED` (a surface exists
+  but wasn't verified) and `INCONCLUSIVE` (verified attempt, ambiguous
+  evidence). **Known limitation**: if the login page is reachable only via a
+  JS-driven menu/click the browser crawler doesn't happen to trigger (rather
+  than a discoverable link or form), Sentinel will honestly report no auth
+  surface found rather than guessing one exists.
+- **Opt-in authenticated scanning**: a developer-supplied test-account
+  credential (`VerifiedTarget.auth_header`, set via
+  `POST /api/targets/{id}/credential`) is attached to the browser crawl and
+  active tests when a scan sets `authenticated_scan: true`. Sentinel never
+  self-registers or generates a credential — the account must already exist
+  in the authorized test environment.
+- **Two-account authorization (IDOR/BOLA) testing**: with a second
+  credential (`VerifiedTarget.auth_header_b`), Sentinel requests a resource
+  id actually observed under Account A's session using Account B's session.
+  A finding fires only on a byte-identical, reproducible response — never
+  against a guessed id or an arbitrary third-party account.
+- **Central Attack Surface Inventory + Test Planner**: all discovery sources
+  feed one inventory (`inventory.py`) where every endpoint/parameter gets a
+  unique internal id (`ep_0001`/`pm_0001`) and a normalized route. The Test
+  Planner (`test_planner.py`) then maps that inventory to the 12 attacks —
+  SQLi only to injectable params, path traversal only to file-shaped params,
+  open redirect only to redirect params/endpoints, file upload only to
+  multipart endpoints, etc. No attack module crawls; nothing is tested
+  against everything.
+- **12 attack modules** (`attacks/`): SQL Injection, XSS (reflected + DOM),
+  Path Traversal, Open Redirect, Security Misconfiguration (headers/TLS/
+  cookies/CORS/methods/directory-listing/version disclosure), Sensitive
+  Information Disclosure (responses/JS/source-maps/errors/exposed files),
+  Authentication & Authorization, API Authentication, HTTP Parameter
+  Pollution, File Upload, VHost Isolation, and Subdomain Takeover. Each wraps
+  evidence-based detection and emits a per-(endpoint,parameter,attack) result.
+- **Subdomain Takeover** (detection-only): resolves discovered subdomains'
+  CNAME chains, matches known provider fingerprints (GitHub Pages, S3,
+  Heroku, Netlify, …) and only reports when a dangling record **and** the
+  provider's unclaimed-service signature both hold — never claims/registers
+  anything.
+- **File upload testing**: discovered multipart endpoints are probed with
+  harmless canary files only (never executable content); a bare "upload
+  endpoint exists" is never itself a vulnerability.
+- **Honest test-status vocabulary**: every matrix row and per-attack summary
+  reports `VULNERABLE`, `NOT_VULNERABLE`, `NOT_TESTED`, `INCONCLUSIVE`, or
+  `NOT_APPLICABLE` — never a bare pass/fail. A test whose attack surface was
+  never discovered reports `NOT_TESTED`, never a silent pass; authentication
+  that exists but has no supplied credential is `NOT_TESTED`, never
+  `NOT_VULNERABLE`.
+- **Test matrix + coverage**: a per-(endpoint,parameter,attack) matrix proves
+  which tests actually ran; per-attack coverage reports eligible / tested /
+  skipped / inconclusive / vulnerable / not-vulnerable; crawl coverage
+  reports discovered-vs-tested counts — discovery is never counted as testing.
+- **Deterministic 5-factor risk**: `Risk = 0.35·TypeSeverity + 0.20·Confidence
+  + 0.20·Exposure + 0.15·BlastRadius + 0.10·AssetSeverity` per finding;
+  **overall risk = the highest confirmed finding's score**. Coverage and
+  assessment confidence are reported as separate numbers and never modify the
+  risk score — see [ARCHITECTURE.md](./ARCHITECTURE.md#coverage--assessment).
+- **Debug mode** (`SCAN_DEBUG=1`): a bracketed-tag trace
+  (`[CRAWLER] [BROWSER] [NETWORK] [API] [PARAM] [TEST-PLANNER] [TEST]
+  [BASELINE] [COMPARE] [EVIDENCE] [RESULT] [RISK] [COVERAGE]`) so a scan is
+  traceable to the exact stage it failed. Zero cost when off.
 
 ## Project Structure
 
@@ -206,6 +235,18 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+One-time setup for real-browser crawling (JS/SPA discovery — Angular/React/
+Vue apps render their actual routes and API calls only after JS executes,
+which a static HTML parse never sees):
+
+```bash
+playwright install chromium
+```
+
+This is not a hard dependency — if Chromium isn't installed, the browser
+crawler degrades gracefully and Sentinel falls back to the static crawler
+alone, with a note in scan debug output.
+
 Run the database migrations:
 
 ```bash
@@ -243,25 +284,9 @@ npm run dev
    testing; otherwise scans against it stay passive-only.
 3. Open the New Scan page, enter a URL you're authorized to test, confirm
    authorization, and submit.
-4. Watch it live on the Scan Detail page (SSE): Fast Scan result appears in
-   seconds, Deep Scan and the AI analysis follow.
-
-## Try It (CLI / CI-CD)
-
-No database, no server, no ownership verification needed — this scans a
-checkout you already have:
-
-```bash
-cd backend
-PYTHONPATH=. python3 -m app.cli scan <path-to-checkout> \
-    --fail-on high --max-risk 70 --json report.json
-echo $?   # 0 = passed, 1 = a gate failed, 2 = usage error
-```
-
-See [ARCHITECTURE.md § CLI / CI-CD Mode](./ARCHITECTURE.md#cli--cicd-mode)
-for the full flag reference and gate semantics, and
-[.github/workflows/sentinel.yml](./.github/workflows/sentinel.yml) for a
-working GitHub Actions example.
+4. Watch it live on the Scan Detail page (SSE): the Fast Scan result appears
+   in seconds; the Deep Scan (discovery → 12 attack modules → matrix,
+   coverage, and deterministic risk) follows.
 
 ## Target Ownership Verification
 
@@ -537,31 +562,33 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 
 Honestly, not aspirationally — these are the current, real edges:
 
-- **IDOR/BOLA** mostly reports **inconclusive**. It only fires when the same
-  scan happens to observe two distinct concrete values for the same
-  parameter *and* a test credential is supplied — the crawler intentionally
-  collapses ID variation during discovery, so this is rare by design, not a
-  bug.
+- **12 attacks only.** This version runs exactly the 12 attacks listed at the
+  top and nothing else — no NoSQL/command injection, SSRF, XXE, SSTI, CSRF,
+  deserialization, standalone CORS, or GraphQL/WebSocket-specific attacks.
+  The `attacks/` registry + Test Planner make adding one later a local change,
+  but none run today.
+- **No source-code or AI analysis.** Sentinel is purely dynamic: no SAST,
+  secret, or dependency scanning, and no LLM. Every status and the risk score
+  come only from deterministic, evidence-based dynamic tests.
 - **Auth/authz testing** requires a developer-supplied credential
-  (`POST /api/targets/{id}/credential`). Without one, it never guesses —
-  it reports the test as inconclusive.
-- **File upload testing** only ever sends inert canary content (never a
-  real executable payload) and only escalates to a "confirmed accessible"
-  finding when Sentinel can fetch back its own canary — it does not attempt
-  to execute anything it uploads.
-- **Custom test cases** are capped at 20 per scan and run through the same
-  safety limits as every built-in active test — no elevated privileges.
-- **Subdomain assessment** is bounded (`SUBDOMAIN_ASSESS_LIMIT`, default 5)
-  and shares the scan's one request budget — it is not a full independent
-  scan of every discovered subdomain.
-- **Remediation verification** compares fingerprints against the same
-  target's last two completed scans only; it does not track a longer
-  history, and a check that didn't run in a given scan can't confirm
-  something else was actually fixed.
-- **Payload encoding** escalates only for path traversal and command
-  injection, and only on query/form parameters — XSS/SQLi rely on their
-  existing plain-payload set, and JSON body/header values aren't
-  byte-level re-encoded the same way query strings are.
+  (`VerifiedTarget.auth_header`, opt-in via `authenticated_scan: true`).
+  Without one, an authentication surface that exists is reported `NOT_TESTED`
+  — never guessed, never `NOT_VULNERABLE`. Two-account IDOR/BOLA needs a
+  second credential (`auth_header_b`) and only fires on a reproducible,
+  byte-identical cross-account read.
+- **File upload testing** only ever sends inert canary content (never an
+  executable payload) and reports only demonstrated impact.
+- **Subdomain takeover is detection-only**: it reports a takeover only when a
+  dangling record and the provider's unclaimed-service signature both hold,
+  and never claims or registers the dangling service.
+- **Browser crawling is discovery-bounded, not exhaustive**: it follows
+  same-origin links and reads the rendered DOM's forms, but does not open
+  menus, scroll-triggered content, or multi-step flows. A login page reachable
+  only through such interaction may not be discovered — Sentinel then reports
+  authentication honestly as not-found rather than guessing.
+- **No self-service registration**: Sentinel never creates a test account on
+  a target — a human creates it once in the authorized environment and
+  supplies the session.
 
 ## Running Tests
 

@@ -16,21 +16,6 @@ from app.models.scan import Scan
 from app.services.finding_types import SEVERITY_ORDER
 
 
-def _ai_block(scan: Scan) -> dict:
-    try:
-        risk_data = json.loads(scan.risk_factors_json) if scan.risk_factors_json else {}
-    except (ValueError, TypeError):
-        risk_data = {}
-    return {
-        "analyzed": scan.ai_analyzed,
-        "error": scan.ai_error,
-        "summary": scan.ai_summary,
-        "recommendation": scan.ai_recommendation,
-        "risk_factors": risk_data.get("risk_factors", []),
-        "statistics": risk_data.get("statistics", {}),
-    }
-
-
 def _verification_status(
     fingerprint: str,
     *,
@@ -73,8 +58,10 @@ def build_report(
             "url": f.url,
             "parameter": f.parameter,
             "risk_score": f.risk_score,
-            "llm_verdict": f.llm_verdict,
             "remediation": f.remediation,
+            "parameter_location": f.parameter_location,
+            "auth_context": f.auth_context,
+            "reproducibility": f.reproducibility,
             "verification_status": (
                 _verification_status(
                     f.fingerprint,
@@ -99,11 +86,18 @@ def build_report(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_id": str(scan.id),
         "target": scan.target.base_url if scan.target else "",
-        # One score for dashboard and report alike: the deterministic engine's.
-        "risk_score": scan.risk_score,
-        "sentinel_risk": json.loads(scan.sentinel_risk_json or "{}"),
-        "risk_level": scan.final_risk if scan.ai_analyzed else None,
-        "ai": _ai_block(scan),
+        # Deterministic 5-factor risk: overall = highest confirmed finding's
+        # score. Coverage never modifies it — the three numbers are separate
+        # so low coverage never masquerades as low risk.
+        "risk_score": scan.overall_risk,
+        "overall_risk": scan.overall_risk,
+        "risk_level": scan.final_risk,
+        "assessment_confidence": scan.assessment_confidence,
+        "assessment_coverage": scan.assessment_coverage,
+        "assessment_warning": scan.assessment_warning,
+        "coverage": json.loads(scan.coverage_json or "{}"),
+        "attack_coverage": json.loads(scan.attack_coverage_json or "{}"),
+        "attack_matrix": json.loads(scan.attack_matrix_json or "[]"),
         "discovery": {
             "urls": scan.urls_discovered,
             "apis": scan.apis_discovered,

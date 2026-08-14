@@ -5,7 +5,6 @@ from app.schemas.scan import (
 )
 from app.schemas.finding import FindingRead
 from app.schemas.endpoint import DiscoveredEndpointRead
-from app.schemas.repository import RepositoryRead, SourceFindingRead
 
 __all__ = [
     "ScanCreate",
@@ -13,6 +12,4 @@ __all__ = [
     "ScanEventRead",
     "FindingRead",
     "DiscoveredEndpointRead",
-    "RepositoryRead",
-    "SourceFindingRead",
 ]

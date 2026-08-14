@@ -12,12 +12,10 @@ from app.models.endpoint import DiscoveredEndpoint, Subdomain
 from app.models.enums import TERMINAL_SCAN_STATUSES, UserRole
 from app.models.finding import Finding
 from app.models.report import Report
-from app.models.repository import Repository, SourceFinding
 from app.models.scan import Scan, ScanEvent
 from app.models.user import User
 from app.schemas.endpoint import DiscoveredEndpointRead, SubdomainRead
 from app.schemas.finding import FindingRead
-from app.schemas.repository import RepositoryRead, SourceFindingRead
 from app.schemas.scan import ScanCreate, ScanEventRead, ScanRead
 from app.services.auth import decode_access_token, require_developer
 from app.services.scan_broker import scan_broker
@@ -204,41 +202,6 @@ async def get_scan_subdomains(
         select(Subdomain)
         .where(Subdomain.scan_id == scan_id)
         .order_by(Subdomain.hostname.asc())
-    )
-    return result.scalars().all()
-
-
-@router.get("/{scan_id}/source-findings", response_model=list[SourceFindingRead])
-async def get_scan_source_findings(
-    scan_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_developer),
-):
-    """Per-issue source-code findings (file, line, and the redacted code line).
-
-    This is what powers the code blocks on the scan detail page; the scan
-    snapshot only carries aggregate repo counts.
-    """
-    await _owned_scan(scan_id, db, user)
-    result = await db.execute(
-        select(SourceFinding)
-        .where(SourceFinding.scan_id == scan_id)
-        .order_by(SourceFinding.file.asc(), SourceFinding.line.asc())
-    )
-    return result.scalars().all()
-
-
-@router.get("/{scan_id}/repositories", response_model=list[RepositoryRead])
-async def get_scan_repositories(
-    scan_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_developer),
-):
-    await _owned_scan(scan_id, db, user)
-    result = await db.execute(
-        select(Repository)
-        .where(Repository.scan_id == scan_id)
-        .order_by(Repository.created_at.desc())
     )
     return result.scalars().all()
 

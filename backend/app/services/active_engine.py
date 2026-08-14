@@ -23,25 +23,31 @@ from app.services.finding_types import FindingCandidate
 from app.services.http_client import Fetcher
 from app.services.response_analyzer import AnalyzedResponse, analyze, jaccard
 
+try:
+    from playwright.async_api import async_playwright
+    _PLAYWRIGHT_AVAILABLE = True
+except Exception:  # pragma: no cover - exercised only when not installed
+    _PLAYWRIGHT_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # ParamTarget — a location-agnostic view of one testable parameter
 # ---------------------------------------------------------------------------
 
-_LOCATIONS = ("query", "form", "json", "header")
+_LOCATIONS = ("query", "form", "json", "header", "graphql_variable")
 
 
 @dataclass
 class ParamTarget:
     url: str
     name: str
-    location: str = "query"  # query | form | json | header
+    location: str = "query"  # query | form | json | header | graphql_variable
     method: str = "GET"
     example: str = "1"
 
     @classmethod
     def from_discovered(cls, p: DiscoveredParam) -> "ParamTarget":
         loc = p.param_type if p.param_type in _LOCATIONS else "query"
-        method = p.method or ("POST" if loc in ("form", "json") else "GET")
+        method = p.method or ("POST" if loc in ("form", "json", "graphql_variable") else "GET")
         return cls(
             url=p.url, name=p.name, location=loc, method=method.upper(),
             example=p.example_value or "1",
@@ -99,23 +105,28 @@ def _set_query(url: str, name: str, value: str) -> str:
                        urlencode(q, doseq=True), ""))
 
 
-def build_request(target: ParamTarget, value: str) -> dict:
-    """Build fetch() kwargs that place ``value`` in ``target``'s location."""
+def build_request(target: ParamTarget, value) -> dict:
+    """Build fetch() kwargs that place ``value`` in ``target``'s location.
+    ``value`` is usually a string but for NoSQL-injection payloads (Mongo
+    operator shapes) it is a dict — httpx serializes nested JSON either way."""
     if target.location == "query":
-        return {"url": _set_query(target.url, target.name, value), "method": "GET"}
+        return {"url": _set_query(target.url, target.name, str(value)), "method": "GET"}
     if target.location == "form":
         return {"url": target.url, "method": "POST",
                 "data": {target.name: value}}
     if target.location == "json":
         return {"url": target.url, "method": "POST",
                 "json": {target.name: value}}
+    if target.location == "graphql_variable":
+        return {"url": target.url, "method": "POST",
+                "json": {"variables": {target.name: value}}}
     if target.location == "header":
         return {"url": target.url, "method": "GET",
-                "headers": {target.name: value}}
-    return {"url": _set_query(target.url, target.name, value), "method": "GET"}
+                "headers": {target.name: str(value)}}
+    return {"url": _set_query(target.url, target.name, str(value)), "method": "GET"}
 
 
-async def _send(fetcher: Fetcher, target: ParamTarget, value: str):
+async def _send(fetcher: Fetcher, target: ParamTarget, value):
     req = build_request(target, value)
     return await fetcher.fetch(
         req["url"], method=req.get("method", "GET"),
@@ -147,20 +158,11 @@ _SQL_ERR = re.compile(
     re.IGNORECASE,
 )
 _PASSWD = re.compile(r"root:.*?:0:0:", re.MULTILINE)
-_CMD_EVIDENCE = re.compile(
-    r"uid=\d+\([^)]+\)\s+gid=\d+|/bin/(?:sh|bash):|command not found|"
-    r"syntax error near unexpected token",
-    re.IGNORECASE,
-)
 _XSS_MARKER = "wf7xq<z>'\""
 
 _PATHISH = {
     "file", "path", "page", "doc", "document", "template", "include",
     "download", "dir", "folder", "load", "read", "filename", "name",
-}
-_CMDISH = {
-    "cmd", "command", "exec", "execute", "ping", "host", "ip", "domain",
-    "url", "dns", "query", "run", "system", "shell", "code",
 }
 _REDIRECTISH = {"url", "redirect", "next", "return", "dest", "u", "to", "target"}
 
@@ -202,12 +204,6 @@ def _trav_detect(payload, base_raw, test_raw):
     return m.group(0)[:100] if m else None
 
 
-def _cmd_detect(payload, base_raw, test_raw):
-    if _CMD_EVIDENCE.search(test_raw) and not _CMD_EVIDENCE.search(base_raw):
-        return _first(_CMD_EVIDENCE, test_raw)
-    return None
-
-
 def _first(rx, text):
     m = rx.search(text)
     return m.group(0)[:120] if m else ""
@@ -222,9 +218,6 @@ _TESTS: list[_Test] = [
           lambda t: t.name.lower() in _PATHISH,
           ["../../../../../../etc/passwd", "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"],
           _trav_detect, encoders=[encode_variants, unicode_slash_variants]),
-    _Test("Command Injection", "input_validation", "cmd_injection", "high",
-          lambda t: t.name.lower() in _CMDISH,
-          [";id", "|id", "`id`", "$(id)"], _cmd_detect, encoders=[encode_variants]),
 ]
 
 
@@ -235,8 +228,6 @@ _TESTS: list[_Test] = [
 def priority(target: ParamTarget, test: _Test) -> int:
     name = target.name.lower()
     score = 10
-    if test.dedup_prefix == "cmd_injection" and name in _CMDISH:
-        score += 40
     if test.dedup_prefix == "path_traversal" and name in _PATHISH:
         score += 30
     if test.dedup_prefix == "reflected_xss" and name in ("q", "search", "query", "s", "name", "message", "comment"):
@@ -377,12 +368,14 @@ def _finding(target, test, payload, evidence, confidence, base, analyzed):
         method=target.method,
         parameter=target.name,
         evidence=str(evidence)[:300],
-        request_summary=f"{target.method} {target.url} [{loc}:{target.name}={payload[:40]}]",
+        request_summary=f"{target.method} {target.url} [{loc}:{target.name}={str(payload)[:40]}]",
         response_summary=f"HTTP {analyzed.status_code}; baseline HTTP {base.status_code}",
         description=f"The '{target.name}' {loc} parameter shows an indicator "
         f"for {test.name.lower()}.",
         impact="",  # Groq assigns impact from evidence.
         remediation="",
+        parameter_location=loc,
+        reproducibility="Reproducible - replay the recorded request with the same payload",
         dedup_key=f"{test.dedup_prefix}|{urlsplit(target.url).path}|{loc}:{target.name}",
     )
 
@@ -431,3 +424,56 @@ async def _hpp_test(fetcher: Fetcher, target: ParamTarget) -> list[FindingCandid
             )
         ]
     return []
+
+
+async def check_dom_xss(target: ParamTarget) -> list[FindingCandidate]:
+    """DOM-based XSS: a raw-HTML diff (what `_xss_detect` above does) never
+    sees a client-side template injecting the marker into the DOM *after* JS
+    execution — Angular/React/Vue apps commonly reflect input this way. Runs
+    only for query parameters (the only location a browser navigation can
+    exercise) and only when Playwright/Chromium are actually available;
+    otherwise returns [] so callers can safely call this unconditionally."""
+    if target.location != "query" or not _PLAYWRIGHT_AVAILABLE:
+        return []
+
+    probe_url = _set_query(target.url, target.name, _XSS_MARKER)
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(probe_url, timeout=10_000, wait_until="domcontentloaded")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=4_000)
+                except Exception:
+                    pass
+                rendered = await page.content()
+            finally:
+                await browser.close()
+    except Exception:
+        return []
+
+    if "<z>" not in rendered or _XSS_MARKER not in rendered:
+        return []
+    return [
+        FindingCandidate(
+            title="DOM-based XSS (query)",
+            category="input_validation",
+            severity="high",
+            confidence="potential",
+            url=target.url,
+            method="GET",
+            parameter=target.name,
+            evidence="Marker reflected unescaped in the browser-rendered DOM "
+            "after JavaScript execution (not visible in the raw HTTP response).",
+            request_summary=f"GET {probe_url}",
+            response_summary="Marker present unescaped in page.content() after render.",
+            description=f"The '{target.name}' query parameter is reflected "
+            "unescaped into the DOM by client-side JavaScript.",
+            impact="",
+            remediation="",
+            parameter_location="query",
+            reproducibility="Reproducible - replay the recorded URL in a browser",
+            dedup_key=f"dom_xss|{urlsplit(target.url).path}|{target.name}",
+        )
+    ]

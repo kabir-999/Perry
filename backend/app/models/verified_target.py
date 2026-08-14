@@ -51,6 +51,14 @@ class VerifiedTarget(Base):
     # written to AuditLog and never returned from GET /targets.
     auth_header: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # A second scanner-controlled identity on the same host, used only for
+    # two-account authorization/IDOR testing (Account A's session fetches a
+    # resource; Account B's session requests the same resource id). Same
+    # safety rules as auth_header: developer-supplied only, never
+    # auto-registered, never written to AuditLog, never returned from
+    # GET /targets.
+    auth_header_b: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

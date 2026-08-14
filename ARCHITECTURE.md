@@ -19,61 +19,45 @@ Both entry points funnel findings through the same `FindingCandidate` →
 pipeline, so a CI run and a dashboard scan of the same code produce the same
 number.
 
-## High-level flow (web pipeline)
+## High-level flow (dynamic web pipeline)
+
+Sentinel is a purely dynamic scanner: **no** source-code (SAST/secret/
+dependency) analysis and **no** AI/LLM layer. One centralized crawler feeds
+one Attack Surface Inventory; a Test Planner maps it to the 12 in-scope
+attacks; the attack modules run; risk is the deterministic 5-factor formula.
 
 ```mermaid
 flowchart TD
-    T[User registers Target] --> V[Ownership verification<br/>DNS TXT / .well-known / meta tag]
-    V -->|verified| ACTIVE[Active testing allowed]
-    V -->|unverified| PASSIVE0[Passive-only scans]
     U[User: enters URL] --> API[FastAPI POST /api/scans]
     API --> SM[ScanManager<br/>background task]
     SM --> FS[Stage 1: Fast Scan<br/>~1-2s, bounded requests]
     FS -->|initial result| SSE[(SSE broker)]
     SM --> DS[Stage 2: Deep Scan orchestrator]
 
-    subgraph Discovery
-      CR[Crawler] ; DIR[Directory/File] ; APId[API discovery]
-      PAR[Parameter discovery] ; SUB[Subdomain DNS<br/>wildcard-guarded] ; VH[VHost discovery<br/>wildcard-guarded]
-    end
-    subgraph "Active Testing Engine"
-      PT[ParamTarget<br/>query/form/json/header] --> PS[PayloadStrategy<br/>+ encoded variants if negative]
-      PS --> RB[RequestBuilder] --> RD[ResponseDiff] --> EV[Evidence]
-    end
-    subgraph "Passive + Config Checks"
-      HdrChk[Headers/Cookies/CORS] ; Info[Info exposure] ; ApiSec[API auth]
-    end
-    subgraph "New Testing Capabilities"
-      UP[Upload testing<br/>canary files] ; TRAV[Traversal on<br/>discovered resources]
-      AUTHZ[Authz differential<br/>credential vs none] ; CUST[Custom test cases]
-      SUBA[Subdomain assessment<br/>bounded, budget-shared]
-    end
-    subgraph "Repo Analysis (optional, if repo_url given)"
-      SEC[Secret scan<br/>git-tracking aware] ; SAST[AST taint engine] ; DEP[Dependency/OSV<br/>+ reachability]
-      SEC --> CORR[repo_correlator<br/>source ↔ live endpoint]
-      SAST --> CORR
+    subgraph Discovery["Discovery sources (one inventory)"]
+      CR[Static crawler] ; BR[Browser crawler<br/>Playwright/Chromium]
+      NET[Network interception<br/>behavior-based API classify]
+      DIR[Directory/File] ; APId[API discovery] ; JS[JS bundle mining]
+      PAR[Parameter discovery] ; SUB[Subdomain DNS] ; VH[VHost discovery]
+      AUTH[Auth surface detection]
     end
 
     DS --> Discovery
-    Discovery -->|API params| Active[Active Testing Engine<br/>XSS·SQLi·Traversal·RCE·HPP·Redirect]
-    DS --> Passive[Passive + Config Checks]
-    DS --> NewCaps[New Testing Capabilities]
-    DS --> RepoAnalysis[Repo Analysis]
-    Discovery --> AGG
-    Active --> AGG[Finding Aggregator<br/>dedup + affected_urls]
-    Passive --> AGG
-    NewCaps --> AGG
-    RepoAnalysis --> AGG
-    AGG --> RM[Sentinel Risk Model v1<br/>CVSS v4.0 + Hardening Model]
-    RM --> SUMM[ScanSummary<br/>one structured payload]
-    SUMM --> GROQ[Groq LLM Analyst<br/>ONE call, Pydantic-validated]
-    GROQ --> DB[(PostgreSQL)]
-    AGG --> DB
+    Discovery --> INV[Attack Surface Inventory<br/>endpoints/params with unique IDs]
+    INV --> TP[Test Planner<br/>maps surface → eligible attacks]
+    TP --> ATT[12 Attack Modules<br/>SQLi·XSS·Traversal·OpenRedirect·Misconfig·<br/>SensitiveInfo·Auth·APIAuth·HPP·Upload·VHost·SubTakeover]
+    ATT --> EX[Evidence validation<br/>per endpoint/param/attack]
+    EX --> AGG[Finding dedup + affected_urls]
+    AGG --> RE[5-factor risk engine<br/>overall = highest confirmed finding]
+    EX --> MAT[Test matrix + per-attack coverage]
+    MAT --> COV[Coverage + assessment confidence<br/>separate from the risk score]
+    RE --> DB[(PostgreSQL)]
+    COV --> DB
     DS -->|live progress| SSE
     DB --> READ[GET /live, /stream, /findings, /report]
     READ --> REMED[Remediation verification<br/>vs. prior scans of this target]
     SSE --> READ
-    READ --> UI[Scan Detail page<br/>risk · summary · risk factors · tests · findings]
+    READ --> UI[Scan Detail page<br/>risk · confidence · coverage · attack coverage · matrix · findings]
 ```
 
 ## Backend (FastAPI + async SQLAlchemy + Postgres)
@@ -199,72 +183,129 @@ app/
 alembic/                  migrations (12, linear — see README)
 ```
 
-## CLI / CI-CD Mode
+## Attack Surface Inventory + Test Planner + attack modules
 
-`backend/app/cli.py` runs the same `repo_analyzer` secret/SAST/dependency
-scan and the same `severity_policy` + `risk_model` pipeline as the web
-dashboard's repo-analysis path, against a local checkout — no network target,
-no ownership verification:
+Three modules make discovery and testing separable and honest:
 
-```bash
-cd backend
-PYTHONPATH=. python3 -m app.cli scan <path> \
-    --fail-on {info,low,medium,high,critical} \
-    --max-risk <int> \
-    --json report.json \
-    [--skip-deps] [--quiet]
+- **`inventory.py`** — the one `AttackSurfaceInventory` every discovery source
+  populates. Each endpoint/parameter gets a unique id (`ep_0001`/`pm_0001`)
+  and a `normalized_route` (id-shaped path segments collapsed to `{id}`), so
+  the same route/param seen twice counts once and path parameters are
+  identifiable. No attack module discovers on its own.
+- **`test_planner.py`** — `plan_tests(inventory, …)` maps the inventory to the
+  12 attacks by eligibility (SQLi/XSS → injectable params; traversal →
+  file-shaped params; open redirect → redirect params/3xx endpoints; upload →
+  multipart endpoints; API-auth → API endpoints; auth → auth surface;
+  misconfig/sensitive-info/vhost → host-level; subdomain-takeover →
+  subdomains). Pure and deterministic; it selects targets, never sends a
+  request. Eligible-but-not-run tests stay visible as `NOT_TESTED`.
+- **`attacks/`** — `catalog.py` (the 12 canonical names), `executor.py`
+  (`execute_plan` → one `TestExecution` per planned test, plus a
+  `FindingCandidate` when the evidence proves a vulnerability), and
+  `modules.py` (the 12 runners, each wrapping evidence-based detection from
+  `active_engine`/`security_checks`, plus `subdomain_takeover.py`). The
+  registry is keyed by the 12 names so a 13th is a local addition, never a
+  crawler change.
+
+## Risk model — deterministic 5-factor (`app/services/risk_engine.py`)
+
+The one risk calculation. Pure and deterministic — the same findings always
+produce the same score, with no AI and no CVSS/aggregation machinery:
+
+```
+Risk = 0.35·TypeSeverity + 0.20·Confidence + 0.20·Exposure
+     + 0.15·BlastRadius + 0.10·AssetSeverity          (each factor 0-100)
 ```
 
-Two independent gates decide the process exit code (`0` = all configured
-gates passed, `1` = a gate failed, `2` = usage/error):
+- **TypeSeverity** — the finding's severity band (critical…info).
+- **Confidence** — `confirmed`/`potential`/`uncertain`/`false_positive`
+  (unknown → `uncertain`, never a mid-value default).
+- **Exposure** — how many locations the issue affects (`exposure_multiplier`
+  tiers, hard-capped).
+- **BlastRadius** — how far exploitation could spread, per category.
+- **AssetSeverity** — how sensitive the tested endpoint/parameter is.
 
-- **Severity Gate** — did any finding meet/exceed `--fail-on`?
-- **Risk Gate** — did the overall risk score exceed `--max-risk`?
+**Overall application risk = the highest confirmed/validated finding's own
+5-factor score** (`overall_confirmed_risk`) — not an aggregation of many
+findings, and never modified by coverage. Findings are deduplicated by
+`dedup_key` (`risk_model.deduplicate`) before scoring. A scan with no
+confirmed findings is 0.
 
-A low overall score never overrides a failed severity gate and vice versa —
-each is evaluated and reported independently, with the specific finding(s)
-or score that caused a failure named in the output. `--json` writes a
-machine-readable report (`risk_score`, `risk_level`, `gates`, `exit_code`,
-per-finding detail) suitable for GitHub Actions, GitLab CI, or any CI runner.
+## Coverage & Assessment (`app/services/coverage.py`, `app/services/assessment.py`)
 
-A **gitignored, never-committed secret** (e.g. a local `.env`) is reported
-as an informational "Secret Hygiene" note — `Status: IGNORED / NOT EXPOSED`
-— and contributes zero to the risk score, since it was never actually
-exposed to anyone who clones the repository. A genuinely **committed**
-secret is unaffected and still scores as a Critical vulnerability.
+A risk score is only as trustworthy as how much of the target was actually
+examined. Sentinel reports three separate numbers so low coverage never
+masquerades as low risk:
 
-## Sentinel Risk Model v1 (`app/services/risk_model/`)
+- **`overall_risk`** (0-100) — how bad the worst *confirmed* evidence is.
+- **`assessment_confidence`** (`HIGH`/`MEDIUM`/`LOW`/`INSUFFICIENT`) — how
+  much to trust that score, given how much was examined.
+- **`assessment_coverage`** (0-100%) — the raw discovery+testing completeness.
 
-Deterministic, auditable, pure — the same findings always produce the same
-score; no LLM involvement in scoring itself (the LLM only explains the
-finished number). Two scales, never mixed:
+**Coverage never modifies the risk score.** `overall_risk` is exactly
+`overall_confirmed_risk(findings)` (the highest confirmed finding's 5-factor
+score); coverage and confidence are reported next to it, not folded in. This
+is the key property: a barely-examined target can't read as "safe" (its
+*confidence* is low), and a shallow-but-clean scan can't inflate its risk.
 
-- **CVSS v4.0** for actual vulnerabilities (SQLi, XSS, traversal, hardcoded
-  secrets, ...), scored via the `cvss` library against the vulnerability
-  class's fixed vector — not approximated or adjusted.
-- **The Sentinel Hardening Model** for configuration weaknesses (missing
-  headers, weak cookies, present-but-unreachable dependency advisories) on
-  its own documented 0–100 scale — an absent mitigation, not an
-  independently exploitable flaw.
+- **Per-attack coverage** (`coverage.per_attack_coverage`): for each of the
+  12 attacks — eligible / tested / skipped / inconclusive / vulnerable /
+  not-vulnerable, plus a rolled-up status. Discovery is never counted as
+  testing (§27): eligible ≠ tested.
+- **Test matrix** (`coverage.build_test_matrix`): one row per executed test
+  (endpoint, normalized route, parameter, attack, status) — proof an attack
+  actually ran.
+- **Crawl coverage** (`CoverageMetrics`): discovered-vs-tested counts for
+  URLs/APIs/params/forms/etc. Its `coverage_ratio` blends test-completeness
+  (65%) and discovery-breadth (35%) and feeds only the confidence ladder.
 
-Detection **confidence** (`confirmed` / `potential` / `uncertain` /
-`false_positive` → 0.95 / 0.60 / 0.35 / 0.0; any unrecognized value is
-treated as `uncertain` and logged, never silently defaulted to a mid-value)
-and **detection status** (`DETECTED` / `VALIDATED` / `EXPLOIT_DEMONSTRATED`)
-scale a finding's contribution but never change its severity band. Findings
-are **deduplicated by `dedup_key`** before scoring — the same underlying
-issue reported by two engines (e.g. a SAST hit and `repo_correlator`'s live
-correlation of it) must share a key so it scores once, not twice. A single
-severe finding sets the floor; everything else adds only a bounded,
-diminishing remainder of the distance to 100, so breadth registers without
-letting many weak/uncertain findings outweigh one confirmed Critical.
+`assessment_confidence` is a deterministic threshold ladder on
+`coverage_ratio` + the inconclusive-test ratio + scan-error/crawl-limit
+flags (`_confidence` in `assessment.py`) — never inferred from the risk score
+itself. Below `HIGH`, a `warning` string explains why.
 
-**Risk authority (web pipeline only):** the deterministic scanner produces
-*evidence*; the risk score/level shown on the dashboard come solely from
-Groq's validated assessment (if Groq is unavailable the UI shows "AI
-analysis unavailable" with no fabricated score). The CLI has no LLM step —
-its score is the raw Sentinel Risk Model output, which is what CI gates
-against.
+### Test-status vocabulary (`app/services/test_status.py`)
+
+Every matrix row and per-attack summary reports one of five statuses, not a
+pass/fail binary:
+
+| Status | Meaning |
+|---|---|
+| `VULNERABLE` | The test ran against real discovered surface and found an issue. |
+| `NOT_VULNERABLE` | The test ran against real discovered surface and found nothing. |
+| `NOT_TESTED` | The attack surface was never discovered, or the test didn't run (budget/authorization/scope) — never a claim of safety. |
+| `INCONCLUSIVE` | The test ran but produced ambiguous evidence (e.g. no credential to probe an authorization boundary that does exist). |
+| `NOT_APPLICABLE` | This test class genuinely doesn't apply (e.g. no authentication system exists on the target at all). |
+
+The distinction that matters most: **zero discovered attack surface is
+`NOT_TESTED`, never a silent `NOT_VULNERABLE`.** This is the direct fix for
+a target reporting a misleadingly clean "API Security: PASS" purely because
+zero API endpoints were ever discovered against it.
+
+## Real-browser crawling (`app/services/browser_crawler.py`)
+
+A static BeautifulSoup parse of the homepage response sees nothing an
+Angular/React/Vue SPA injects into the DOM after JS execution, and never
+sees a request the app's own client-side code issues (`fetch`/XHR/axios/
+Angular `HttpClient` all funnel through the same browser network layer, so
+none need special-casing). `browser_crawl` drives one headless-Chromium
+instance per deep scan via Playwright, navigating same-origin links found in
+the *rendered* DOM (not the raw HTML) and capturing every network request
+via `page.on("request"/"response")`.
+
+**Classification is behavior-based, never a URL-string match**
+(`network_classifier.py`): Playwright's own `resource_type` (`"xhr"`/
+`"fetch"` = the app issued this as data, not a page load) plus the
+response's actual content-type decide API vs. page vs. asset vs. GraphQL vs.
+WebSocket — a request to `/rest/products` or `/whatever-shape-the-backend-
+uses` is classified identically to one at `/api/products`, which is exactly
+the fix for a scanner that only ever finds endpoints shaped like its own
+wordlist.
+
+Graceful degradation: if Playwright/Chromium isn't installed,
+`browser_crawl` returns an empty result with `.errors` populated instead of
+raising, and `deep_scan.py` falls back to the static crawler alone — this is
+never a hard runtime dependency.
 
 ## Auth & Target Verification
 

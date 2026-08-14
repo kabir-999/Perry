@@ -50,13 +50,10 @@ class Finding(Base):
     # the same underlying issue" without any source-code fix-tracking.
     fingerprint: Mapped[str] = mapped_column(String(512), default="", index=True)
 
-    # LLM Security Analyst enrichment (Phase 5). Nullable until analyzed.
-    llm_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    llm_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    llm_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    llm_false_positive_reason: Mapped[str | None] = mapped_column(
-        Text, nullable=True
-    )
+    # Evidence fields — see FindingCandidate for the vocabulary.
+    parameter_location: Mapped[str] = mapped_column(String(32), default="")
+    auth_context: Mapped[str] = mapped_column(String(128), default="")
+    reproducibility: Mapped[str] = mapped_column(String(256), default="")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
