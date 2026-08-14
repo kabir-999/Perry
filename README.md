@@ -664,11 +664,63 @@ cd backend
 PYTHONPATH=. pytest -q
 ```
 
+## Deployment (Vercel + Railway)
+
+The web pipeline deploys as two independent services — a static frontend
+on Vercel and the FastAPI backend + Postgres on Railway. They talk over
+plain HTTPS; there is no shared origin, so CORS and the frontend's API
+base URL must be configured explicitly (see below).
+
+### Backend (Railway)
+
+1. Create a new Railway project from this repo, with the service's root
+   directory set to `backend/` (monorepo setting in Railway's project
+   settings — it needs to find `railway.toml` there).
+2. Add a Postgres plugin to the project. Railway injects `DATABASE_URL`
+   automatically — reference it in the backend service's variables as
+   `${{Postgres.DATABASE_URL}}` rather than pasting a literal value.
+   `app/config.py` rewrites Railway's `postgres://`/`postgresql://` scheme
+   to the `postgresql+psycopg://` dialect SQLAlchemy needs, so no manual
+   edits to the URL are required.
+3. Set the remaining service variables from `backend/.env.example`, at
+   minimum `JWT_SECRET`, `LOG_ENCRYPTION_KEY` (both must be changed from
+   their dev defaults), and `FRONTEND_ORIGINS` (a JSON array containing
+   your Vercel domain, e.g. `["https://your-app.vercel.app"]`).
+4. `backend/railway.toml` defines the build (`pip install -r
+   requirements.txt`) and start command (`alembic upgrade head && uvicorn
+   app.main:app --host 0.0.0.0 --port $PORT`), plus a health check against
+   `/api/health`. Deploy and note the public Railway URL — you'll need it
+   for the frontend.
+5. Playwright-based browser crawling degrades gracefully if Chromium isn't
+   installed (Railway's default Nixpacks build won't have it); everything
+   else works unaffected. Installing Chromium there would need a custom
+   Dockerfile — out of scope unless you specifically need JS/SPA crawling
+   in production.
+
+### Frontend (Vercel)
+
+1. Import this repo into Vercel with the project root set to `frontend/`.
+   Build command `npm run build`, output directory `dist` (Vercel's
+   Vite preset detects both automatically).
+2. Set the `VITE_API_URL` environment variable to your Railway backend's
+   public URL plus the `/api` prefix, e.g.
+   `https://your-backend.up.railway.app/api` (see
+   `frontend/.env.example`). Without it the app falls back to the
+   relative `/api` path used for local dev, which has nothing to proxy to
+   in production.
+3. `frontend/vercel.json` adds an SPA rewrite (`/*` → `/index.html`) so
+   client-side routes (react-router) don't 404 on refresh.
+4. After both are deployed, update the backend's `FRONTEND_ORIGINS` to
+   match the final Vercel URL (Vercel preview deployments get their own
+   subdomain — add those too if you need CORS to work from previews, not
+   just production).
+
 ## No Docker
 
-This project intentionally runs without Docker at this stage. Use the
-local setup steps above (`uvicorn` + `npm run dev` + a local PostgreSQL
-instance) for the web pipeline; the CLI needs neither.
+Beyond the Railway/Vercel configs above, this project intentionally runs
+without Docker at this stage. Use the local setup steps earlier in this
+doc (`uvicorn` + `npm run dev` + a local PostgreSQL instance) for local
+development; the CLI needs neither.
 
 ## Further Reading
 
