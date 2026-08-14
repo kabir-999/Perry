@@ -247,6 +247,24 @@ class ScanManager:
                     if verified is not None:
                         auth_header = verified.auth_header
                         auth_header_b = verified.auth_header_b
+                # A crawl of this target's frontend can capture calls to a
+                # separate backend origin (e.g. a Vercel SPA calling a Render
+                # API) via the browser network layer. Testing that origin is
+                # only safe if the same user has independently demonstrated
+                # control of it too — otherwise a captured call to some
+                # unrelated third-party API would get attacked with no
+                # authorization at all. Widening allowed_hosts here (rather
+                # than in scope.py) is what makes it in-scope for both crawl
+                # navigation and attack eligibility, without weakening the
+                # scope check for anyone who hasn't verified a second host.
+                if scan.user_id is not None:
+                    other_hosts = (await db.execute(
+                        select(VerifiedTarget.hostname).where(
+                            VerifiedTarget.user_id == scan.user_id,
+                            VerifiedTarget.verification_status == tv.VERIFIED,
+                        )
+                    )).scalars().all()
+                    scope.allowed_hosts.update(other_hosts)
                 scan.status = ScanStatus.FAST_SCANNING.value
                 scan.started_at = datetime.now(timezone.utc)
                 await db.commit()
