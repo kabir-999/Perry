@@ -16,11 +16,14 @@ import type {
   User,
 } from "../types";
 
-// Requests are proxied to the FastAPI backend by Vite (see vite.config.ts).
-// The Groq API key never touches the frontend — all LLM calls happen
-// server-side.
+// In local dev, requests are proxied to the FastAPI backend by Vite (see
+// vite.config.ts) via the relative "/api" path. In production (Vercel
+// frontend, Railway backend) there is no shared origin to proxy through, so
+// VITE_API_URL must point at the deployed backend, e.g.
+// "https://your-backend.up.railway.app/api". The Groq API key never touches
+// the frontend — all LLM calls happen server-side.
 const client = axios.create({
-  baseURL: "/api",
+  baseURL: import.meta.env.VITE_API_URL || "/api",
 });
 
 const TOKEN_KEY = "wf.token";
@@ -152,8 +155,9 @@ export const scansApi = {
   ): EventSource => {
     // EventSource cannot set headers, so the token travels as a query param.
     const token = getToken();
+    const streamBase = import.meta.env.VITE_API_URL || "/api";
     const source = new EventSource(
-      `/api/scans/${scanId}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`,
+      `${streamBase}/scans/${scanId}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`,
     );
     source.onmessage = (e) => {
       try {

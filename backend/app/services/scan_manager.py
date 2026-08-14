@@ -223,12 +223,14 @@ class ScanManager:
         passive_only = False
         auth_header: str | None = None
         auth_header_b: str | None = None
+        rate_limit_per_second = 0.0
         try:
             async with AsyncSessionLocal() as db:
                 scan = await db.get(Scan, scan_id)
                 if scan is None:
                     return
                 passive_only = scan.passive_only
+                rate_limit_per_second = scan.rate_limit_per_second or 0
                 # A test credential is only ever used for a scan that's
                 # already running active tests against a verified target,
                 # and only when the user explicitly opted into authenticated
@@ -272,6 +274,7 @@ class ScanManager:
                         passive_only=passive_only,
                         auth_header=auth_header,
                         auth_header_b=auth_header_b,
+                        rate_limit_per_second=rate_limit_per_second,
                     ),
                     timeout=deep_scan_module.settings.DEEP_SCAN_TIMEOUT_SECONDS,
                 )
