@@ -480,6 +480,114 @@ async def _scan_dependencies(
         except Exception as exc:
             logger.warning("Could not parse %s: %s", req_txt_path, exc)
 
+    # Check go.mod
+    go_mod_path = repo_path / "go.mod"
+    if go_mod_path.exists():
+        try:
+            content = go_mod_path.read_text(encoding="utf-8")
+            deps = {}
+            for m in re.finditer(
+                r"^\s*(?:require\s+)?([\w.\-/]+\.[\w.\-/]+)\s+(v[\w.\-+]+)",
+                content, re.MULTILINE,
+            ):
+                deps[m.group(1)] = m.group(2)
+            findings.extend(await _query_osv("Go", deps, repo_path, files, declared))
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", go_mod_path, exc)
+
+    # Check Gemfile.lock (pinned versions; Gemfile alone has none to query)
+    gemfile_lock_path = repo_path / "Gemfile.lock"
+    if gemfile_lock_path.exists():
+        try:
+            content = gemfile_lock_path.read_text(encoding="utf-8")
+            deps = {}
+            for line in content.splitlines():
+                m = re.match(r"^\s{4}([A-Za-z0-9_.-]+)\s+\(([\d.]+)", line)
+                if m:
+                    deps[m.group(1)] = m.group(2)
+            findings.extend(await _query_osv("RubyGems", deps, repo_path, files, declared))
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", gemfile_lock_path, exc)
+
+    # Check pom.xml
+    pom_path = repo_path / "pom.xml"
+    if pom_path.exists():
+        try:
+            import xml.etree.ElementTree as ET
+
+            root = ET.fromstring(pom_path.read_text(encoding="utf-8", errors="ignore"))
+            ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+            deps = {}
+            dep_nodes = root.findall(".//m:dependencies/m:dependency", ns)
+            if not dep_nodes:
+                dep_nodes = root.findall(".//dependency")
+            for dep in dep_nodes:
+                artifact = dep.find("m:artifactId", ns)
+                if artifact is None:
+                    artifact = dep.find("artifactId")
+                version = dep.find("m:version", ns)
+                if version is None:
+                    version = dep.find("version")
+                if artifact is not None and artifact.text and version is not None and version.text:
+                    deps[artifact.text.strip()] = version.text.strip()
+            findings.extend(await _query_osv("Maven", deps, repo_path, files, declared))
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", pom_path, exc)
+
+    # Check composer.json
+    composer_path = repo_path / "composer.json"
+    if composer_path.exists():
+        try:
+            doc = json.loads(composer_path.read_text(encoding="utf-8"))
+            deps = {
+                name: version for name, version in (doc.get("require") or {}).items()
+                if name != "php" and not name.startswith("ext-")
+            }
+            findings.extend(await _query_osv("Packagist", deps, repo_path, files, declared))
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", composer_path, exc)
+
+    # Check Cargo.toml
+    cargo_path = repo_path / "Cargo.toml"
+    if cargo_path.exists():
+        try:
+            content = cargo_path.read_text(encoding="utf-8")
+            deps = {}
+            in_deps = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_deps = stripped.startswith("[dependencies")
+                    continue
+                if not in_deps or not stripped or stripped.startswith("#"):
+                    continue
+                m = re.match(r'^([A-Za-z0-9_.\-]+)\s*=\s*"([^"]+)"', stripped)
+                if m:
+                    deps[m.group(1)] = m.group(2)
+                else:
+                    m2 = re.match(r'^([A-Za-z0-9_.\-]+)\s*=\s*\{.*version\s*=\s*"([^"]+)"', stripped)
+                    if m2:
+                        deps[m2.group(1)] = m2.group(2)
+            findings.extend(await _query_osv("crates.io", deps, repo_path, files, declared))
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", cargo_path, exc)
+
+    # Check .csproj (NuGet) — version is an attribute, not a manifest line.
+    for csproj_path in repo_path.glob("*.csproj"):
+        try:
+            import xml.etree.ElementTree as ET
+
+            root = ET.fromstring(csproj_path.read_text(encoding="utf-8", errors="ignore"))
+            deps = {}
+            for ref in root.findall(".//PackageReference"):
+                name = ref.get("Include") or ref.get("Update")
+                version = ref.get("Version")
+                if name and version:
+                    deps[name] = version
+            findings.extend(await _query_osv("NuGet", deps, repo_path, files, declared))
+        except Exception as exc:
+            logger.warning("Could not parse %s: %s", csproj_path, exc)
+
     return findings
 
 
