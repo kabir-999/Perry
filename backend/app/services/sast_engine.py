@@ -57,7 +57,17 @@ RULES: list[Rule] = [
     Rule(
         "sql_injection", "SQL injection", "critical", "CWE-89",
         ("query", "execute", "executemany", "raw", "cursor.execute",
-         "db.query", "connection.query", "sequelize.query", "knex.raw"),
+         "db.query", "connection.query", "sequelize.query", "knex.raw",
+         # Java (JDBC)
+         "createStatement", "executeQuery", "executeUpdate",
+         # Go (database/sql) — capitalized, distinct from the lowercase JS/py forms
+         "Query", "Exec", "QueryRow",
+         # PHP
+         "mysqli_query", "pg_query",
+         # Ruby
+         "find_by_sql",
+         # C# (ADO.NET)
+         "ExecuteReader", "ExecuteNonQuery", "ExecuteScalar"),
         ("escape", "escapeId", "parameterize", "sql.identifier", "prepare"),
         "User input must never be concatenated into a query string.",
         "The database receives one string containing both the query and the "
@@ -91,7 +101,14 @@ RULES: list[Rule] = [
         "command_injection", "OS command injection", "critical", "CWE-78",
         ("exec", "execSync", "spawn", "spawnSync", "system", "popen",
          "os.system", "subprocess.run", "subprocess.call", "subprocess.Popen",
-         "child_process.exec"),
+         "child_process.exec",
+         # Go (os/exec) — bare "exec" already covers the JS/Python forms, but
+         # Go's own package-qualified form needs its own dotted entry.
+         "exec.Command",
+         # PHP
+         "shell_exec", "passthru", "proc_open",
+         # C# (System.Diagnostics)
+         "Process.Start"),
         ("shlex.quote", "escapeShellArg", "quote"),
         "User input must never reach a shell.",
         "When input is interpolated into a shell command, characters like "
@@ -107,7 +124,9 @@ RULES: list[Rule] = [
     Rule(
         "xss", "Cross-site scripting", "high", "CWE-79",
         ("send", "write", "end", "innerHTML", "outerHTML",
-         "dangerouslySetInnerHTML", "document.write", "insertAdjacentHTML"),
+         "dangerouslySetInnerHTML", "document.write", "insertAdjacentHTML",
+         # C# (ASP.NET)
+         "Response.Write"),
         ("escape", "encodeURIComponent", "sanitize", "DOMPurify.sanitize",
          "escapeHtml", "textContent"),
         "Untrusted input must be encoded for the context it is rendered into.",
@@ -124,7 +143,19 @@ RULES: list[Rule] = [
     Rule(
         "ssrf", "Server-side request forgery", "high", "CWE-918",
         ("fetch", "axios", "urlopen", "requests.get", "requests.post",
-         "http.get", "https.get", "axios.get", "axios.post", "got"),
+         "http.get", "https.get", "axios.get", "axios.post", "got",
+         # Go (net/http) — capitalized package-qualified form
+         "http.Get", "http.Post",
+         # PHP
+         "curl_exec",
+         # Note: Ruby's Kernel#open (open-uri, SSRF-capable) is deliberately
+         # NOT added here — bare "open" is already claimed by Python's
+         # open() builtin under path_traversal below, and RULES order (ssrf
+         # comes first) would silently steal that claim. Documented gap.
+         # Rust
+         "reqwest.get",
+         # C#
+         "GetAsync", "DownloadString"),
         ("validateURL", "isURL", "allowlist", "urlparse"),
         "The server must not fetch arbitrary attacker-supplied URLs.",
         "The server makes the request, so it reaches places the attacker "
@@ -138,7 +169,19 @@ RULES: list[Rule] = [
     Rule(
         "path_traversal", "Path traversal", "high", "CWE-22",
         ("readFile", "readFileSync", "createReadStream", "sendFile",
-         "open", "unlink", "writeFile", "os.path.join"),
+         "open", "unlink", "writeFile", "os.path.join",
+         # Java
+         "Files.readAllBytes", "readAllBytes",
+         # Go
+         "os.Open", "os.ReadFile", "ioutil.ReadFile",
+         # PHP
+         "fopen", "file_get_contents", "readfile",
+         # Ruby (constant-based receiver: File.open/File.read)
+         "File.open", "File.read",
+         # Rust (normalized from File::open / fs::read / fs::read_to_string)
+         "fs.read", "fs.read_to_string",
+         # C#
+         "File.ReadAllText", "File.Open", "File.ReadAllBytes"),
         ("basename", "path.basename", "resolve", "secure_filename", "normalize"),
         "File paths must be confined to an intended directory.",
         "`../` sequences walk up out of the intended folder, so a filename "
@@ -153,7 +196,13 @@ RULES: list[Rule] = [
     Rule(
         "unsafe_deserialization", "Unsafe deserialization", "critical", "CWE-502",
         ("pickle.loads", "pickle.load", "yaml.load", "marshal.loads",
-         "unserialize", "deserialize"),
+         "unserialize", "deserialize",
+         # Java
+         "readObject",
+         # Ruby
+         "Marshal.load",
+         # C# (best-effort bare match, no type inference)
+         "Deserialize"),
         ("yaml.safe_load", "json.loads", "SafeLoader"),
         "Never deserialize untrusted data into live objects.",
         "Formats like pickle and unsafe YAML reconstruct arbitrary objects and "
@@ -177,7 +226,17 @@ RULES: list[Rule] = [
     ),
     Rule(
         "open_redirect", "Open redirect", "medium", "CWE-601",
-        ("redirect", "location", "Location"),
+        ("redirect", "location", "Location",
+         # Java
+         "sendRedirect",
+         # PHP (header("Location: " . $url))
+         "header",
+         # Ruby (Rails)
+         "redirect_to",
+         # Go
+         "http.Redirect",
+         # C#
+         "Response.Redirect"),
         ("isURL", "allowlist", "startsWith"),
         "Redirect targets must be validated against an allowlist.",
         "An attacker sends a link to your trusted domain that bounces the "
@@ -527,13 +586,27 @@ def analyze_python(path: Path, rel: str, code: str) -> list[SastFinding]:
 
 _JS_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
+# Extension -> tree-sitter grammar name, for the 6 polyglot languages
+# (polyglot_sast.py). Kept here (not just in polyglot_sast) so
+# `analyze_sources`/`compute_language_coverage` have one shared source of
+# truth for "which extensions are source code Sentinel understands at all".
+_POLYGLOT_EXT = {
+    ".java": "java", ".go": "go", ".php": "php", ".rb": "ruby",
+    ".rs": "rust", ".cs": "csharp",
+}
+
 
 def analyze_sources(repo_path: Path, files: list[Path]) -> list[SastFinding]:
-    """Run taint analysis over every supported source file."""
+    """Run taint analysis over every supported source file — Python, JS/TS
+    natively, plus Java/Go/PHP/Ruby/Rust/C# via polyglot_sast.py (degrades to
+    skipped, never a crash, if tree-sitter isn't installed)."""
+    from app.services.polyglot_sast import analyze_polyglot
+
     findings: list[SastFinding] = []
     for file_path in files:
         suffix = file_path.suffix.lower()
-        if suffix not in _JS_EXT and suffix != ".py":
+        polyglot_lang = _POLYGLOT_EXT.get(suffix)
+        if suffix not in _JS_EXT and suffix != ".py" and polyglot_lang is None:
             continue
         try:
             rel = str(file_path.relative_to(repo_path))
@@ -545,8 +618,10 @@ def analyze_sources(repo_path: Path, files: list[Path]) -> list[SastFinding]:
         try:
             if suffix == ".py":
                 findings.extend(analyze_python(file_path, rel, code))
-            else:
+            elif suffix in _JS_EXT:
                 findings.extend(analyze_javascript(file_path, rel, code))
+            else:
+                findings.extend(analyze_polyglot(file_path, rel, code, polyglot_lang))
         except RecursionError:
             continue
 
@@ -559,3 +634,45 @@ def analyze_sources(repo_path: Path, files: list[Path]) -> list[SastFinding]:
             seen.add(key)
             unique.append(f)
     return unique
+
+
+# Human-readable label per extension, for the CLI's `languages` report.
+_LANGUAGE_LABEL = {
+    ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript (JSX)",
+    ".ts": "TypeScript", ".tsx": "TypeScript (TSX)", ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
+    ".java": "Java", ".go": "Go", ".php": "PHP", ".rb": "Ruby",
+    ".rs": "Rust", ".cs": "C#",
+}
+
+
+def compute_language_coverage(repo_path: Path, files: list[Path]) -> dict:
+    """Per-language SAST coverage: how many source files of each recognized
+    language were found vs. actually analyzed vs. skipped, and why.
+
+    This is the direct fix for a scan silently reporting "0 findings" for a
+    language that was never actually analyzed (e.g. tree-sitter not
+    installed) — the honesty already established for the dynamic scanner's
+    NOT_TESTED vs. NOT_VULNERABLE distinction, applied here to source
+    analysis. Never touches disk beyond what the caller already gathered;
+    purely a re-classification of `files` by extension.
+    """
+    from app.services.polyglot_sast import _TS_AVAILABLE
+
+    coverage: dict[str, dict] = {}
+    for file_path in files:
+        suffix = file_path.suffix.lower()
+        if suffix not in _LANGUAGE_LABEL:
+            continue
+        label = _LANGUAGE_LABEL[suffix]
+        entry = coverage.setdefault(label, {
+            "files_found": 0, "files_analyzed": 0, "files_skipped": 0,
+            "skip_reason": "",
+        })
+        entry["files_found"] += 1
+        if suffix in _POLYGLOT_EXT and not _TS_AVAILABLE:
+            entry["files_skipped"] += 1
+            entry["skip_reason"] = "tree-sitter not installed"
+        else:
+            entry["files_analyzed"] += 1
+    return coverage

@@ -77,7 +77,29 @@ _ENTRYPOINT_NAMES = {
     "app.ts", "main.ts",
 }
 
-_SOURCE_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+_SOURCE_EXTENSIONS = (
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".go", ".rb", ".java", ".php", ".rs", ".cs",
+)
+
+# Canonical OSV.dev ecosystem strings this module recognizes, keyed by every
+# lowercase alias a caller/manifest reader might use for it.
+_ECOSYSTEM_ALIASES = {
+    "pypi": "python", "python": "python",
+    "npm": "js", "node": "js",
+    "go": "go", "golang": "go",
+    "rubygems": "ruby", "ruby": "ruby",
+    "maven": "java", "java": "java",
+    "packagist": "php", "php": "php",
+    "crates.io": "rust", "cargo": "rust", "rust": "rust",
+    "nuget": "csharp", "csharp": "csharp", ".net": "csharp",
+}
+
+
+def _ecosystem_family(ecosystem: str) -> str:
+    """Normalize any accepted ecosystem spelling to one of the family keys
+    used by `_module_names`/`_import_patterns` below."""
+    return _ECOSYSTEM_ALIASES.get(ecosystem.lower(), "js")
 
 
 @dataclass
@@ -116,11 +138,20 @@ class DependencyUsage:
 
 def _module_names(package: str, ecosystem: str) -> set[str]:
     """Import names a package plausibly registers."""
+    family = _ecosystem_family(ecosystem)
     names = {package}
-    if ecosystem.lower() in ("pypi", "python"):
+    if family == "python":
         # requests-oauthlib -> requests_oauthlib; also the bare first segment.
         names.add(package.replace("-", "_"))
         names.add(package.replace("-", "_").split(".")[0])
+    elif family == "rust":
+        # serde-json (Cargo.toml) is used in source as `serde_json`.
+        names.add(package.replace("-", "_"))
+    elif family in ("java", "php"):
+        # Manifests name the artifact/vendor coordinate; source imports use
+        # only the last dotted/slash-separated segment of that name.
+        names.add(package.split(".")[-1])
+        names.add(package.split("/")[-1])
     else:
         # Scoped npm packages are imported by their full name.
         names.add(package.split("/")[-1])
@@ -128,13 +159,31 @@ def _module_names(package: str, ecosystem: str) -> set[str]:
 
 
 def _import_patterns(package: str, ecosystem: str) -> list[re.Pattern]:
+    family = _ecosystem_family(ecosystem)
     patterns: list[re.Pattern] = []
     for name in _module_names(package, ecosystem):
         escaped = re.escape(name)
-        if ecosystem.lower() in ("pypi", "python"):
+        if family == "python":
             patterns.append(
                 re.compile(rf"^\s*(?:from\s+{escaped}(?:\.\w+)*\s+import\b|import\s+{escaped}\b)", re.MULTILINE)
             )
+        elif family == "go":
+            # A single-line `import "pkg"` or one line of a grouped
+            # `import (\n\t"pkg"\n)` block — each import is its own line.
+            patterns.append(re.compile(
+                rf"""(?:import\s+"{escaped}(?:/[^"]*)?"|^\s*"{escaped}(?:/[^"]*)?")""",
+                re.MULTILINE,
+            ))
+        elif family == "ruby":
+            patterns.append(re.compile(rf"""require(?:_relative)?\s+['"]{escaped}(?:/[^'"]*)?['"]"""))
+        elif family == "java":
+            patterns.append(re.compile(rf"""import\s+(?:static\s+)?[\w.]*\b{escaped}\b[\w.]*\s*;"""))
+        elif family == "php":
+            patterns.append(re.compile(rf"""use\s+[\w\\]*\\?{escaped}\b""", re.IGNORECASE))
+        elif family == "rust":
+            patterns.append(re.compile(rf"""(?:use\s+{escaped}\b|extern\s+crate\s+{escaped}\b)"""))
+        elif family == "csharp":
+            patterns.append(re.compile(rf"""using\s+[\w.]*\b{escaped}\b[\w.]*\s*;"""))
         else:
             patterns.append(
                 re.compile(
@@ -223,6 +272,122 @@ def read_declared_dependencies(repo_path: Path) -> dict[tuple[str, str], tuple[b
             for match in re.finditer(r"^\s*['\"]?([A-Za-z0-9_.-]+)['\"]?\s*[=<>~^]", text, re.MULTILINE):
                 declared.setdefault(("PyPI", match.group(1)), (True, False))
         except OSError:
+            pass
+
+    # --- Go modules ---
+    go_mod = repo_path / "go.mod"
+    if go_mod.exists():
+        try:
+            text = go_mod.read_text(encoding="utf-8", errors="ignore")
+            # Single-line `require pkg v1.2.3` and lines inside a
+            # `require (\n\tpkg v1.2.3\n)` block share the same shape once
+            # the leading "require" keyword is optional.
+            for match in re.finditer(
+                r"^\s*(?:require\s+)?([\w.\-/]+\.[\w.\-/]+)\s+v[\w.\-+]+", text, re.MULTILINE
+            ):
+                declared[("Go", match.group(1))] = (True, False)
+        except OSError:
+            pass
+
+    # --- Ruby (Bundler) ---
+    gemfile_lock = repo_path / "Gemfile.lock"
+    if gemfile_lock.exists():
+        try:
+            for line in gemfile_lock.read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = re.match(r"^\s{4}([A-Za-z0-9_.-]+)\s+\([\d.]+", line)
+                if m:
+                    declared.setdefault(("RubyGems", m.group(1)), (False, False))
+        except OSError:
+            pass
+    gemfile = repo_path / "Gemfile"
+    if gemfile.exists():
+        try:
+            text = gemfile.read_text(encoding="utf-8", errors="ignore")
+            for match in re.finditer(r"""^\s*gem\s+['"]([A-Za-z0-9_.-]+)['"]""", text, re.MULTILINE):
+                declared[("RubyGems", match.group(1))] = (True, False)
+        except OSError:
+            pass
+
+    # --- Java/Kotlin (Maven / Gradle) ---
+    pom = repo_path / "pom.xml"
+    if pom.exists():
+        try:
+            import xml.etree.ElementTree as ET
+
+            root = ET.fromstring(pom.read_text(encoding="utf-8", errors="ignore"))
+            ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+            deps = root.findall(".//m:dependencies/m:dependency", ns) or root.findall(".//dependency")
+            for dep in deps:
+                artifact = dep.find("m:artifactId", ns)
+                if artifact is None:
+                    artifact = dep.find("artifactId")
+                scope = dep.find("m:scope", ns)
+                if scope is None:
+                    scope = dep.find("scope")
+                if artifact is not None and artifact.text:
+                    is_dev = bool(scope is not None and scope.text == "test")
+                    declared[("Maven", artifact.text.strip())] = (True, is_dev)
+        except Exception:
+            pass
+    for gradle_name in ("build.gradle", "build.gradle.kts"):
+        gradle = repo_path / gradle_name
+        if not gradle.exists():
+            continue
+        try:
+            text = gradle.read_text(encoding="utf-8", errors="ignore")
+            for match in re.finditer(
+                r"""(?:implementation|api|compile|testImplementation)\s*[\(\s]\s*['"]([\w.\-]+):([\w.\-]+):""",
+                text,
+            ):
+                declared.setdefault(("Maven", match.group(2)), (True, "test" in match.group(0)))
+        except OSError:
+            pass
+
+    # --- PHP (Composer) ---
+    composer = repo_path / "composer.json"
+    if composer.exists():
+        try:
+            doc = json.loads(composer.read_text(encoding="utf-8", errors="ignore"))
+            for section in ("require", "require-dev"):
+                is_dev = section == "require-dev"
+                for name in (doc.get(section) or {}):
+                    if name == "php" or name.startswith("ext-"):
+                        continue
+                    declared[("Packagist", name)] = (True, is_dev)
+        except (ValueError, TypeError, OSError):
+            pass
+
+    # --- Rust (Cargo) ---
+    cargo = repo_path / "Cargo.toml"
+    if cargo.exists():
+        try:
+            text = cargo.read_text(encoding="utf-8", errors="ignore")
+            in_deps = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_deps = stripped.startswith("[dependencies") or stripped.startswith("[dev-dependencies")
+                    is_dev_section = "dev-dependencies" in stripped
+                    continue
+                if not in_deps or not stripped or stripped.startswith("#"):
+                    continue
+                m = re.match(r"""^([A-Za-z0-9_.\-]+)\s*=""", stripped)
+                if m:
+                    declared[("crates.io", m.group(1))] = (True, is_dev_section)
+        except OSError:
+            pass
+
+    # --- .NET (NuGet) ---
+    for csproj in repo_path.glob("*.csproj"):
+        try:
+            import xml.etree.ElementTree as ET
+
+            root = ET.fromstring(csproj.read_text(encoding="utf-8", errors="ignore"))
+            for ref in root.findall(".//PackageReference"):
+                name = ref.get("Include") or ref.get("Update")
+                if name:
+                    declared[("NuGet", name)] = (True, False)
+        except Exception:
             pass
 
     return declared

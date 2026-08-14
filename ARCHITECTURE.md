@@ -1,28 +1,35 @@
 # Architecture
 
-**Sentinel** — a web application security scanner with two entry points:
+**Sentinel** — a web application security scanner with two independent entry
+points that do not share a risk model:
 
 1. **Web pipeline** — a user registers a target, verifies ownership, and
-   enters a URL. A fast preliminary result comes back in ~1-2s, then a deep
-   automated assessment runs in the background and is analyzed by an LLM.
-   Two-stage async pipeline: **Fast Scan** → **Deep Scan** → **one Groq
-   call** → results on a single page, streamed live over SSE.
+   enters a URL. A fast preliminary result comes back in ~1-2s, then a
+   purely deterministic deep assessment runs in the background: one
+   centralized crawler feeds one Attack Surface Inventory, a Test Planner
+   maps it to the 12 in-scope attacks, and a **5-factor risk score**
+   (`app/services/risk_engine.py`) is computed — no AI/LLM layer, no
+   source-code analysis. Results stream live over SSE.
 2. **CLI / CI-CD pipeline** (`app/cli.py`) — a static, local, non-network
-   scan of a source checkout: secrets, AST-based SAST, and dependency
-   advisories, scored by the same deterministic **Sentinel Risk Model** and
-   gated on severity/risk thresholds for build pipelines. No target
-   ownership verification applies here — the developer already has the
-   checkout. See [CLI / CI-CD Mode](#cli--cicd-mode).
+   scan of a source checkout: secrets, AST-based SAST (Python, JS/TS
+   natively; Java/Go/PHP/Ruby/Rust/C# via `tree-sitter`, see
+   `app/services/polyglot_sast.py`), and dependency advisories across 8
+   ecosystems, gated on severity/risk thresholds for build pipelines. No
+   target ownership verification applies here — the developer already has
+   the checkout. See [CLI / CI-CD Mode](#cli--cicd-mode).
 
-Both entry points funnel findings through the same `FindingCandidate` →
-`severity_policy.apply_policy` → `risk_model.calculate_sentinel_risk`
-pipeline, so a CI run and a dashboard scan of the same code produce the same
-number.
+Both entry points score findings with the same per-finding **5-factor
+formula** (`risk_engine.score_finding`/`risk_breakdown`) via
+`FindingCandidate` → `severity_policy.apply_policy` → `risk_engine.score_all`
+— but the web pipeline's *overall* risk (highest confirmed finding) and the
+CLI's *overall* risk are computed independently for their respective finding
+sets; a CI run and a dashboard scan are two different attack surfaces
+(source code vs. a running target), not the same number.
 
 ## High-level flow (dynamic web pipeline)
 
-Sentinel is a purely dynamic scanner: **no** source-code (SAST/secret/
-dependency) analysis and **no** AI/LLM layer. One centralized crawler feeds
+The dynamic web pipeline is purely deterministic — no AI/LLM layer, no
+source-code analysis (that's the separate CLI, above). One centralized crawler feeds
 one Attack Surface Inventory; a Test Planner maps it to the 12 in-scope
 attacks; the attack modules run; risk is the deterministic 5-factor formula.
 
@@ -430,6 +437,67 @@ Fixed, all as corrections to existing logic rather than new architecture:
   being dropped by a dict-merge collision.
 
 Regression tests for all of the above live in `backend/tests/`.
+
+## CLI / CI-CD Mode (`app/cli.py`)
+
+`python -m app.cli scan <path>` runs three independent analyzers over a
+local checkout and merges their output into one `FindingCandidate` list,
+scored by the same `risk_engine` 5-factor formula the web pipeline uses:
+
+- **Secrets** (`repo_analyzer._scan_secrets`) — regex-based, genuinely
+  language-agnostic: runs over every gathered file regardless of extension.
+- **SAST** (`sast_engine.analyze_sources`) — dispatches by extension to
+  either the native Python (`ast`)/JS-TS (`esprima`) taint visitors, or (for
+  `.java`/`.go`/`.php`/`.rb`/`.rs`/`.cs`) `polyglot_sast.analyze_polyglot`.
+- **Dependencies** (`repo_analyzer._scan_dependencies` +
+  `dependency_analysis.py`) — manifest readers per ecosystem (npm, PyPI, Go
+  modules, RubyGems, Maven, Packagist, crates.io, NuGet), each querying
+  OSV.dev (`_query_osv`, ecosystem-agnostic — it's just a string in the
+  request payload) then running the same reachability classification
+  (`reachability.py`) regardless of ecosystem.
+
+### `polyglot_sast.py` — one generic taint engine, not six
+
+The native Python/JS engines are two independent, hand-rolled
+`ast.NodeVisitor`/esprima-closure implementations with no shared
+abstraction. Rather than write four more from-scratch parsers,
+`polyglot_sast.py` implements **one** intraprocedural taint algorithm — the
+same shape as `sast_engine._PyTaint` (track a `tainted: dict[name ->
+provenance]`, propagate through assignment/concatenation, flag a tainted
+value reaching a `Rule.sink`, downgrade through a `Rule.sanitizer`) — driven
+by `tree-sitter` grammars and a small per-language table of verified node
+type names (`_dotted()` flattens each language's call/member syntax into one
+dotted-string form so `sast_engine._rule_for` and its sink table work
+unmodified across all languages).
+
+Two mechanics specific to real-world code, not just syntax:
+
+- **Framework-aware source detection** (`_seed_params`) — real handlers
+  bind input onto **parameters** via an annotation (Spring's
+  `@RequestParam`, ASP.NET's `[FromQuery]`), a type hint (Laravel's
+  `Request $request`), or a typed extractor (axum/actix's `Query<T>`), not a
+  raw platform call. Without this, idiomatic Spring/ASP.NET/Laravel/axum
+  code has literally no recognizable attacker-controlled input and reports
+  a false "0 findings" indistinguishable from genuinely clean code.
+  `_seed_params` runs whenever `_walk` enters a function/method declaration,
+  seeding `tainted` from the parameter list before the body is walked. Go's
+  case is a per-file *root* extension rather than a per-parameter value seed
+  (`__extra_go_roots__` inside the `tainted` dict) — Go doesn't do
+  annotation-based binding, so instead any parameter typed `*http.Request`
+  becomes an additional recognized source root regardless of what it's
+  named (generalizing the fixed `r`/`req`/`request` name-matching that
+  already covers idiomatic handlers).
+- **Receiver taint propagation** — `$request->input('x')` is tainted
+  because `$request` itself is a known-tainted object (from `_seed_params`),
+  not because an *argument* to `input()` is tainted. `_taint_of`'s call
+  branch checks the call's own dotted root against `tainted` before falling
+  back to checking arguments.
+
+Coverage is never silent: `sast_engine.compute_language_coverage` reports,
+per language, how many files were found vs. analyzed vs. skipped and why
+(`"tree-sitter not installed"` is the only skip reason today) — surfaced in
+the CLI's `languages` report section and JSON key, so a whole language never
+being checked can't be mistaken for "verified clean."
 
 ## Frontend (React + TypeScript + Vite + Tailwind)
 

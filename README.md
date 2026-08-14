@@ -12,9 +12,13 @@ applications. A user registers a target and gets:
    confirmed finding's score), reported alongside — but never blended with —
    an independent **assessment confidence** and **coverage** percentage.
 
-Sentinel is a purely **dynamic** web scanner: there is no AI/LLM layer and no
-source-code (SAST/secret/dependency) analysis — risk and every status come
-solely from deterministic, evidence-based tests.
+The **dynamic web pipeline** above is purely deterministic: no AI/LLM layer,
+every status and risk score come solely from evidence-based tests. A
+**separate** standalone CLI (`python -m app.cli scan <path>`) runs
+AST-based source-code analysis — SAST, secret detection, and dependency
+advisories — across Python, JavaScript/TypeScript, Java, Go, PHP, Ruby,
+Rust, and C#, independent of the dynamic scanner's risk model. See
+"CLI / CI-CD Source Analysis" below.
 
 > **Scope**: only scan applications you own, applications you have explicit
 > written authorization to test, local test apps, or intentionally
@@ -287,6 +291,64 @@ npm run dev
 4. Watch it live on the Scan Detail page (SSE): the Fast Scan result appears
    in seconds; the Deep Scan (discovery → 12 attack modules → matrix,
    coverage, and deterministic risk) follows.
+
+## CLI / CI-CD Source Analysis
+
+A standalone command, independent of the web pipeline above — scans a local
+checkout for source-code vulnerabilities, hardcoded secrets, and vulnerable
+dependencies, with no network target and no ownership verification (the
+developer already has the checkout):
+
+```bash
+cd backend
+python -m app.cli scan /path/to/repo --fail-on high --json report.json
+```
+
+Two independent gates decide the exit code: `--fail-on {info,low,medium,high,critical}`
+(did any finding meet/exceed this severity) and `--max-risk N` (did the
+5-factor risk score exceed N/100) — a low risk score never overrides a
+failed severity gate, and vice versa. `.github/workflows/sentinel.yml` wires
+this into CI on every push/PR.
+
+**Language coverage** — real AST-based taint tracking (source → sanitizer →
+sink), not keyword matching, across:
+
+| Language | Parser | Framework-aware source detection |
+|---|---|---|
+| Python | stdlib `ast` | `request.args`/`.form`/`.json`/`.GET`/`.POST`/… |
+| JavaScript/TypeScript | `esprima` | `req.body`/`.query`/`.params`, `searchParams.get`, `formData.get` |
+| Java | `tree-sitter` | Spring annotations: `@RequestParam`/`@PathVariable`/`@RequestBody`/`@RequestHeader`/`@CookieValue` |
+| C# | `tree-sitter` | ASP.NET attributes: `[FromQuery]`/`[FromRoute]`/`[FromBody]`/`[FromHeader]`/`[FromForm]` |
+| PHP | `tree-sitter` | `$_GET`/`$_POST`/superglobals, and a type-hinted `Request $request` parameter (Laravel/Symfony) |
+| Ruby | `tree-sitter` | `params[]`, `request.body`/`.query_parameters` |
+| Go | `tree-sitter` | `r.URL.Query()`/`.FormValue`, and **any** parameter typed `*http.Request` regardless of its name |
+| Rust | `tree-sitter` | `req.query`/`.form`/`.json`, and typed extractor parameters (`Query<T>`/`Json<T>`/`Path<T>`/`Form<T>` — axum/actix-web) |
+
+`tree-sitter`/`tree-sitter-language-pack` are the parsers for the 6 newer
+languages — if they aren't installed, those languages degrade to **skipped**
+(never a crash, never a silently-wrong "0 findings"): the report's
+`languages` section states exactly which languages were analyzed vs. skipped
+and why, e.g. `Go: 4 files found, 4 skipped (tree-sitter not installed)`.
+This is what stops "no findings" from being mistaken for "verified safe"
+when a whole language simply wasn't checked. Dependency-advisory scanning
+(against OSV.dev) covers npm, PyPI, **Go modules, RubyGems, Maven, Packagist,
+crates.io, and NuGet**.
+
+**Known limitations, stated honestly:**
+- **Intraprocedural only** — a taint path that crosses a function/method
+  boundary isn't traced. A path that can't be traced within one file is
+  reported as absent, never assumed.
+- **No type inference** — sinks matched by bare method name (e.g. C#'s
+  `.Deserialize`/`.GetAsync`) accept any receiver, trading precision for
+  recall, the same way existing bare names like `exec`/`query` already do.
+- **Language constructs that aren't function calls** (PHP's `include`/
+  `require`/`echo`, Ruby's backtick shell syntax) aren't sinks here — this
+  engine only recognizes call expressions.
+- **Java's Maven-coordinate-to-package-name mapping is undecidable from the
+  manifest alone** (`commons-lang3` the artifact vs. `org.apache.commons.lang3`
+  the import) — the dependency *declaration* and its OSV advisory lookup are
+  unaffected, but the *usage/reachability* heuristic (is this import actually
+  used at runtime?) may under-report for Java specifically.
 
 ## Target Ownership Verification
 
@@ -567,9 +629,14 @@ Honestly, not aspirationally — these are the current, real edges:
   deserialization, standalone CORS, or GraphQL/WebSocket-specific attacks.
   The `attacks/` registry + Test Planner make adding one later a local change,
   but none run today.
-- **No source-code or AI analysis.** Sentinel is purely dynamic: no SAST,
-  secret, or dependency scanning, and no LLM. Every status and the risk score
-  come only from deterministic, evidence-based dynamic tests.
+- **No AI analysis in the dynamic (web) pipeline.** Every status and risk
+  score there come only from deterministic, evidence-based dynamic tests —
+  no LLM. Source-code analysis is a *separate* surface: the standalone
+  `python -m app.cli scan <path>` command (and the CI/CD workflow that
+  wraps it) runs AST-based SAST, secret detection, and dependency-advisory
+  scanning against a local checkout — see "CLI / CI-CD Source Analysis"
+  below. It's independent of, and does not feed, the dynamic web scanner's
+  risk model.
 - **Auth/authz testing** requires a developer-supplied credential
   (`VerifiedTarget.auth_header`, opt-in via `authenticated_scan: true`).
   Without one, an authentication surface that exists is reported `NOT_TESTED`

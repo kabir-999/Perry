@@ -128,6 +128,10 @@ async def scan_path(root: Path, *, skip_deps: bool = False) -> dict:
     code = _sast_findings(root, files)
     deps = [] if skip_deps else await _scan_dependencies(root, files)
 
+    from app.services.sast_engine import compute_language_coverage
+
+    languages = compute_language_coverage(root, files)
+
     secret_findings = [_to_finding(s, "information_exposure") for s in secrets]
 
     # Secrets are already redacted at the source (`SourceFinding.evidence`/
@@ -190,6 +194,7 @@ async def scan_path(root: Path, *, skip_deps: bool = False) -> dict:
         "counts": counts,
         "risk": risk,
         "findings": out_findings,
+        "languages": languages,
     }
 
 
@@ -248,6 +253,22 @@ def _render(result: dict, severity_gate: dict, sev_reason: str | None,
         "",
         f"Files analyzed: {result['files_analyzed']}",
         "",
+    ]
+
+    languages = result.get("languages") or {}
+    if languages:
+        lines += ["Languages", "─────────"]
+        for label, info in sorted(languages.items()):
+            if info["files_skipped"]:
+                lines.append(
+                    f"{label}: {info['files_found']} file(s) found, "
+                    f"{info['files_skipped']} skipped ({info['skip_reason']})"
+                )
+            else:
+                lines.append(f"{label}: {info['files_analyzed']} file(s) analyzed")
+        lines.append("")
+
+    lines += [
         "Security Gates",
         "──────────────",
     ]
