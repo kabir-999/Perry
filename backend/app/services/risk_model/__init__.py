@@ -127,6 +127,38 @@ _CVSS_PROFILES: dict[str, dict] = {
         "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
         "undetermined": ["VA"],
     },
+    # --- Phase 2 classes ---------------------------------------------------
+    "ssti": {
+        "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H",
+        "undetermined": [],
+        "note": "Assumes template evaluation can escalate toward code execution.",
+    },
+    "stored_xss": {
+        # Stored XSS needs no victim interaction to be delivered (UI:N) and hits
+        # every viewer; scored above reflected XSS.
+        "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:L/VI:L/VA:N/SC:L/SI:L/SA:N",
+        "undetermined": ["SC", "SI"],
+        "note": "Persistent XSS affecting all viewers of the stored content.",
+    },
+    "crlf": {
+        "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+        "undetermined": [],
+    },
+    "csrf": {
+        # Requires a victim to visit an attacker page (UI:A); integrity impact.
+        "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N",
+        "undetermined": [],
+    },
+    "idor": {
+        # Broken object-level authorization: another user's data is readable.
+        "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+        "undetermined": ["VI"],
+    },
+    "username_enumeration": {
+        # Low-severity information disclosure (which accounts exist).
+        "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+        "undetermined": [],
+    },
 }
 
 # Scanner categories / dedup-key prefixes that denote a real vulnerability.
@@ -151,6 +183,20 @@ _VULN_KEYS = {
     "unsafe_deserialization": "unsafe_deserialization",
     "code_execution": "code_execution",
     "auth_bypass": "auth_bypass",
+    # --- Phase 2 dedup prefixes ---
+    "ssti": "ssti",
+    "stored_xss": "stored_xss",
+    "dom_xss": "xss",
+    "nosqli": "nosql_injection",
+    "crlf": "crlf",
+    "csrf": "csrf",
+    "idor": "idor",
+    # Auth / session weaknesses
+    "username_enumeration": "username_enumeration",
+    "session_fixation": "auth_bypass",
+    "broken_logout": "auth_bypass",
+    "session_expiration": "auth_bypass",
+    "reset_token_reuse": "auth_bypass",
 }
 
 # Scanner dedup-key prefixes that denote a hardening issue, mapped to a rule
