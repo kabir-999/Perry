@@ -266,11 +266,18 @@ _SQL_ERR = re.compile(
     re.IGNORECASE,
 )
 _PASSWD = re.compile(r"root:.*?:0:0:", re.MULTILINE)
+# Windows system-file content (win.ini / boot.ini) — traversal evidence on
+# Windows targets, the analogue of /etc/passwd on Unix.
+_WININI = re.compile(r"\[fonts\]|\[extensions\]|\[mci extensions\]|for 16-bit app support", re.IGNORECASE)
 _CMD_EVIDENCE = re.compile(
     r"uid=\d+\([^)]+\)\s+gid=\d+|/bin/(?:sh|bash):|command not found|"
     r"syntax error near unexpected token",
     re.IGNORECASE,
 )
+# A harmless, unique command-output canary (`echo CMDCANARY...`). Execution is
+# proven when the canary appears WITHOUT the literal `echo ` prefix (i.e. the
+# shell ran the echo), never merely because the payload string was reflected.
+_CMD_CANARY = "CMDCANARY7f31b9"
 _XSS_MARKER = "wf7xq<z>'\""
 
 _PATHISH = {
@@ -304,9 +311,11 @@ class _Test:
 # Detectors receive: payload, baseline raw text, test raw text.
 def _xss_detect(payload, base_raw, test_raw):
     # Check the RAW response — the marker's angle brackets are stripped from
-    # visible_text. Reflected unescaped '<z>' is the positive signal.
-    if "<z>" in test_raw and _XSS_MARKER in test_raw:
-        return "marker reflected unescaped"
+    # visible_text. A raw '<z>' that was NOT in the baseline means the injected
+    # markup survived unescaped (an executable HTML context), regardless of
+    # which breakout payload (HTML / attribute / tag / script) delivered it.
+    if "<z>" in test_raw and "<z>" not in base_raw:
+        return "marker '<z>' reflected unescaped in an executable HTML context"
     return None
 
 
@@ -318,12 +327,25 @@ def _sqli_detect(payload, base_raw, test_raw):
 
 def _trav_detect(payload, base_raw, test_raw):
     m = _PASSWD.search(test_raw)
-    return m.group(0)[:100] if m else None
+    if m:
+        return m.group(0)[:100]
+    w = _WININI.search(test_raw)
+    if w and not _WININI.search(base_raw):
+        return f"Windows system-file content returned ({w.group(0)})"
+    return None
 
 
 def _cmd_detect(payload, base_raw, test_raw):
     if _CMD_EVIDENCE.search(test_raw) and not _CMD_EVIDENCE.search(base_raw):
         return _first(_CMD_EVIDENCE, test_raw)
+    # Canary echoed as command OUTPUT (appears without the literal `echo `
+    # prefix that a mere reflection of the payload would keep).
+    if (
+        _CMD_CANARY in test_raw
+        and ("echo " + _CMD_CANARY) not in test_raw
+        and _CMD_CANARY not in base_raw
+    ):
+        return f"command-output canary {_CMD_CANARY} echoed (execution confirmed)"
     return None
 
 

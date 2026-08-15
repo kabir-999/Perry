@@ -67,7 +67,7 @@ export default function Projects() {
                       className="shrink-0 rounded-full border px-2 py-0.5 text-xs capitalize"
                       style={{ color: hex, borderColor: `${hex}55`, background: `${hex}18` }}
                     >
-                      {project.latest_final_risk || "minimal"} · {project.latest_risk_score}
+                      {project.latest_final_risk || "minimal"}
                     </span>
                   )}
                 </div>

@@ -107,6 +107,15 @@ class Scan(Base):
     # record per test — vulnerable, clean, skipped, inconclusive, or errored),
     # serialized as a JSON array. Rendered under each attack's box in the UI.
     attack_logs_json: Mapped[str] = mapped_column(Text, default="")
+    # Per-domain + overall baseline-vs-fuzz anomaly scores, serialized as JSON
+    # ({"overall": {...}, "domains": {attack: {...}}}).
+    anomaly_json: Mapped[str] = mapped_column(Text, default="")
+    # Full attack-surface graph (normalized, de-duplicated endpoints with
+    # parent/child edges), serialized as JSON.
+    attack_graph_json: Mapped[str] = mapped_column(Text, default="")
+    # Per-strategy crawl layer (BFS vs DFS): each with its own graph, discovery
+    # score, stats, and crawl log. Serialized as JSON.
+    crawl_strategies_json: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

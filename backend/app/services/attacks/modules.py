@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit, urlunsplit
 
+from app.services import anomaly_engine as anomaly
 from app.services import security_checks
 from app.services.active_engine import (
     ParamTarget,
@@ -39,8 +40,31 @@ from app.services.inventory import Endpoint, Parameter
 from app.services.test_planner import PlannedTest
 from app.services.test_status import TestStatus
 
-_SQLI_PAYLOADS = ["'", "1'\"", "1) OR ('1'='1"]
-_TRAV_PAYLOADS = ["../../../../../../etc/passwd", "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"]
+# SQL injection — quote-perturbation + boolean + comment families (error-based
+# path; boolean-differential blind SQLi is run separately, see run_sql_injection).
+_SQLI_PAYLOADS = [
+    "'", "\"", "1'\"", "1) OR ('1'='1", "' OR '1'='1", "1 OR 1=1", "'--", "1;--",
+]
+# Path traversal — Unix + Windows targets, plain + URL-encoded + double-encoded
+# + mixed-separator + nested-traversal filter-bypass variants.
+_TRAV_PAYLOADS = [
+    "../../../../../../etc/passwd",
+    "..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd",
+    "%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+    "..%252f..%252f..%252f..%252fetc%252fpasswd",
+    "....//....//....//....//etc/passwd",
+    "..\\..\\..\\..\\..\\windows\\win.ini",
+    "..%5c..%5c..%5c..%5cwindows%5cwin.ini",
+]
+# XSS — the same executable-context sentinel `<z>` delivered through several
+# breakout contexts (HTML text, attribute/tag, RCDATA, script block), so a
+# survived raw `<z>` is caught whatever the surrounding context.
+_XSS_PAYLOADS = [
+    _XSS_MARKER,               # HTML text context: wf7xq<z>'"
+    'wf7xq"><z>',              # break out of an attribute / tag
+    "wf7xq</title><z>",        # break out of <title>/RCDATA
+    "wf7xq</script><z>",       # break out of a <script> block
+]
 
 
 # --------------------------------------------------------------------------
@@ -188,9 +212,22 @@ async def run_sql_injection(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.SQL_INJECTION, ep, pm, "SQL Injection", "high", ev, payload, base, test,
                          f"sqli|{ep.normalized_route}|{pm.location}:{pm.name}")
-            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200], finding=f)
+            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
+                         finding=f, anomaly=anom)
+        # No error signature — try boolean-differential (blind) SQLi on query
+        # parameters: a stronger, behavioural signal than an error string alone.
+        if pm.location == "query" and not _budget_gone(ctx):
+            try:
+                bfindings = await phase2_checks.check_sqli_boolean(
+                    ctx.fetcher, ep.url, pm.name, example=pm.original_value or "1")
+            except Exception:
+                bfindings = []
+            if bfindings:
+                return _exec(pt, TestStatus.VULNERABLE, confidence=bfindings[0].confidence,
+                             evidence=bfindings[0].evidence, finding=bfindings[0], anomaly=0.9)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
-                     evidence="No SQL error/behavioural signal after injection.")
+                     evidence="No SQL error or boolean-differential signal after injection.")
 
     return await _map_concurrent(plan, _one)
 
@@ -230,7 +267,7 @@ async def run_xss(plan, ctx: AttackContext):
             return _exec(pt, TestStatus.NOT_TESTED, evidence="missing target")
         if ctx.passive_only:
             return _exec(pt, TestStatus.NOT_TESTED, evidence="passive scan — active probe not sent")
-        ev, payload, base, test, ran = await _probe_param(ctx, ep, pm, [_XSS_MARKER], _xss_detect)
+        ev, payload, base, test, ran = await _probe_param(ctx, ep, pm, _XSS_PAYLOADS, _xss_detect)
         if not ran:
             return _exec(
                 pt,
@@ -250,11 +287,14 @@ async def run_xss(plan, ctx: AttackContext):
                 dom = await check_dom_xss(_param_target(ep, pm))
                 if dom:
                     return _exec(pt, TestStatus.VULNERABLE, confidence="potential",
-                                 evidence="DOM reflection after JS render", finding=dom[0])
+                                 evidence="DOM reflection after JS render", finding=dom[0],
+                                 anomaly=0.9)
         if ev:
             f = _finding(C.XSS, ep, pm, "Reflected XSS", "high", ev, payload, base, test,
                          f"reflected_xss|{ep.normalized_route}|{pm.location}:{pm.name}")
-            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200], finding=f)
+            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
+                         finding=f, anomaly=anom)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="Marker not reflected in an executable context.")
 
@@ -288,7 +328,9 @@ async def run_path_traversal(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.PATH_TRAVERSAL, ep, pm, "Path Traversal", "high", ev, payload, base, test,
                          f"path_traversal|{ep.normalized_route}|{pm.location}:{pm.name}")
-            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200], finding=f)
+            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
+                         finding=f, anomaly=anom)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="No unintended file contents returned.")
 
@@ -517,7 +559,13 @@ async def run_subdomain_takeover(plan, ctx: AttackContext):
 from app.services import phase2_checks  # noqa: E402
 from app.services.active_engine import _cmd_detect  # noqa: E402
 
-_CMD_PAYLOADS = [";id", "|id", "`id`", "$(id)"]
+# Command injection — harmless `echo <canary>` separator families (Unix +
+# Windows) plus the classic `id` probes. NEVER destructive (no rm/del/curl|sh).
+_CMD_PAYLOADS = [
+    ";echo CMDCANARY7f31b9", "|echo CMDCANARY7f31b9", "`echo CMDCANARY7f31b9`",
+    "$(echo CMDCANARY7f31b9)", "& echo CMDCANARY7f31b9",
+    ";id", "|id",
+]
 
 
 async def run_command_injection(plan, ctx: AttackContext):
@@ -538,7 +586,9 @@ async def run_command_injection(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.COMMAND_INJECTION, ep, pm, "Command Injection", "critical", ev, payload, base, test,
                          f"cmd_injection|{ep.normalized_route}|{pm.location}:{pm.name}")
-            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200], finding=f)
+            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
+                         finding=f, anomaly=anom)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="No OS command output observed after injection.")
 

@@ -101,11 +101,22 @@ def plan_tests(
         if pm.location in _INJECTABLE_LOCATIONS:
             add(C.XSS, ep, pm, f"{pm.location} parameter may reflect into a response")
 
-        if _is_pathish(pm) and injectable:
-            add(C.PATH_TRAVERSAL, ep, pm, "parameter name/location references files or resources")
+        # Path traversal is tried on ANY injectable parameter — a file read can
+        # hide behind any name, so name heuristics only prioritise, never gate
+        # (the detector confirms via returned file content, so a non-file
+        # parameter simply comes back NOT_VULNERABLE rather than N/A).
+        if injectable:
+            reason = ("parameter name/location references files or resources"
+                      if _is_pathish(pm) else "injectable parameter — traversal probed broadly")
+            add(C.PATH_TRAVERSAL, ep, pm, reason)
 
-        if _is_redirectish(pm) and pm.location in ("query", "form"):
-            add(C.OPEN_REDIRECT, ep, pm, "parameter name controls a navigation/redirect destination")
+        # Open redirect is tried on any query/form parameter; the detector only
+        # flags an actual external Location redirect, so unrelated parameters
+        # resolve to NOT_VULNERABLE, not N/A.
+        if pm.location in ("query", "form"):
+            reason = ("parameter name controls a navigation/redirect destination"
+                      if _is_redirectish(pm) else "query/form parameter — redirect probed broadly")
+            add(C.OPEN_REDIRECT, ep, pm, reason)
 
         if pm.location == "query":
             add(C.HPP, ep, pm, "query parameter accepts duplicate values")

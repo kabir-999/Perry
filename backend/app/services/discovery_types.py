@@ -120,3 +120,16 @@ class BrowserCrawlResult:
     spa_routes: set[str] = field(default_factory=set)
     pages_rendered: int = 0
     errors: list[str] = field(default_factory=list)
+    # Number of DOM interactions (clicks / benign form submits) performed by
+    # the interaction engine across the crawl.
+    interactions_performed: int = 0
+    # Parent/child attack-surface graph built live during the crawl
+    # ({"nodes": [...], "edges": [...], "roots": [...]}).
+    graph: dict = field(default_factory=dict)
+    # Traversal strategy that produced this result: "bfs" | "dfs".
+    strategy: str = ""
+    # Structured crawl log (one record per navigate / interact / discover /
+    # error), for the per-strategy log view.
+    log: list[dict] = field(default_factory=list)
+    # Deepest depth actually reached during the crawl.
+    max_depth_reached: int = 0
