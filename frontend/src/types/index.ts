@@ -141,6 +141,111 @@ export interface AttackLogRecord {
   meta: Record<string, unknown>;
 }
 
+/** Baseline-vs-fuzz anomaly score for a single attack domain. */
+export interface DomainAnomaly {
+  attack: string;
+  display: string;
+  /** 0–100, or null when the domain was never tested (no comparison ran). */
+  score: number | null;
+  level: "minimal" | "low" | "medium" | "high" | "critical" | "not_tested";
+  max: number;
+  mean: number;
+  tested: number;
+  anomalous: number;
+  measured: number;
+  vulnerable: number;
+}
+
+/** Overall scan anomaly, aggregated across tested domains. */
+export interface OverallAnomaly {
+  score: number;
+  level: "minimal" | "low" | "medium" | "high" | "critical" | "not_tested";
+  domains_tested: number;
+  domains_total: number;
+  domains_anomalous: number;
+  top_domain: string;
+  top_domain_display: string;
+  top_domain_score: number;
+}
+
+export interface ScanAnomaly {
+  overall: OverallAnomaly;
+  domains: Record<string, DomainAnomaly>;
+}
+
+/** One node in the attack-surface graph (a de-duplicated endpoint). */
+export interface AttackGraphNode {
+  id: string;
+  url: string;
+  path: string;
+  label: string;
+  depth: number;
+  discovery: string;
+  methods: string[];
+  params: string[];
+  param_count: number;
+  is_api: boolean;
+  is_form: boolean;
+  score: number;
+  synthetic?: boolean;
+}
+
+export interface AttackGraphEdge {
+  parent: string;
+  child: string;
+  via: string;
+}
+
+export interface AttackGraph {
+  nodes: AttackGraphNode[];
+  edges: AttackGraphEdge[];
+  roots: string[];
+  node_count: number;
+  edge_count: number;
+}
+
+export interface CrawlStats {
+  endpoints: number;
+  apis: number;
+  forms: number;
+  params: number;
+  max_depth: number;
+  avg_score: number;
+  high_value: number;
+  edges: number;
+  pages_rendered: number;
+  interactions: number;
+  network_requests: number;
+  max_depth_reached: number;
+  errors: number;
+}
+
+export interface CrawlLogRecord {
+  seq: number;
+  timestamp: string;
+  event: string;
+  url?: string;
+  depth?: number;
+  via?: string;
+  score?: number;
+  status?: number | null;
+  detail?: string;
+}
+
+/** One crawl strategy's discovery layer (BFS or DFS). */
+export interface CrawlStrategy {
+  strategy: string;
+  graph: AttackGraph;
+  stats: CrawlStats;
+  score: number;
+  log: CrawlLogRecord[];
+}
+
+export interface CrawlStrategies {
+  bfs: CrawlStrategy;
+  dfs: CrawlStrategy;
+}
+
 /** Per-attack coverage rollup, keyed by attack id. */
 export interface AttackCoverageEntry {
   attack: string;
@@ -191,6 +296,12 @@ export interface ScanSnapshot {
   /** Production-grade structured JSON logs for every attack attempt, in
    *  emission order. Grouped by `attack` for display under each attack box. */
   attack_logs?: AttackLogRecord[];
+  /** Per-domain + overall baseline-vs-fuzz anomaly scores. */
+  anomaly?: ScanAnomaly;
+  /** Full attack-surface graph (normalized, de-duplicated, parent/child). */
+  attack_graph?: AttackGraph;
+  /** Per-strategy crawl layer: BFS vs DFS graphs, scores, stats, logs. */
+  crawl_strategies?: CrawlStrategies;
 }
 
 export interface Subdomain {

@@ -21,7 +21,13 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from app.config import settings
-from app.services import active_engine, attack_logger, security_checks
+from app.services import (
+    active_engine,
+    anomaly_engine,
+    attack_graph,
+    attack_logger,
+    security_checks,
+)
 from app.services.api_discovery import discover_apis
 from app.services.assessment import compute_assessment
 from app.services.attacks import catalog as C
@@ -32,7 +38,7 @@ from app.services.coverage import build_test_matrix, compute_coverage, per_attac
 from app.services.crawler import crawl
 from app.services.debug_log import debug_log
 from app.services.directory_scanner import discover_directories
-from app.services.discovery_types import DiscoveredParam, DiscoveredPath
+from app.services.discovery_types import BrowserCrawlResult, DiscoveredParam, DiscoveredPath
 from app.services.fast_scanner import FastScanResult
 from app.services.finding_types import FindingCandidate
 from app.services.http_client import Fetcher, build_async_client
@@ -87,6 +93,18 @@ class DeepScanResult:
     # rendered under each attack's box in the UI.
     attack_logs: list[dict] = field(default_factory=list)
 
+    # Per-domain + overall anomaly scores from the baseline-vs-fuzz comparison
+    # ({"overall": {...}, "domains": {attack: {...}}}).
+    anomaly_scores: dict = field(default_factory=dict)
+
+    # Full attack-surface graph: normalized, de-duplicated endpoints with
+    # parent/child edges ({"nodes": [...], "edges": [...], "roots": [...]}).
+    attack_graph: dict = field(default_factory=dict)
+
+    # Per-strategy crawl layer: {"bfs": {...}, "dfs": {...}}, each with its own
+    # graph, discovery score, stats, and crawl log.
+    crawl_strategies: dict = field(default_factory=dict)
+
     # Deterministic risk (5-factor); overall = highest confirmed finding.
     overall_risk: int = 0
     risk_score: int = 0
@@ -100,6 +118,44 @@ class _Cancelled(Exception):
     pass
 
 
+def _merge_browser_results(a: BrowserCrawlResult, b: BrowserCrawlResult) -> BrowserCrawlResult:
+    """Union two browser-crawl results (BFS + DFS) so the rest of the pipeline
+    sees everything either strategy discovered."""
+    m = BrowserCrawlResult()
+    m.pages = a.pages + b.pages
+    m.network_requests = a.network_requests + b.network_requests
+    m.forms = a.forms + b.forms
+    m.params = a.params + b.params
+    m.js_bundle_urls = set(a.js_bundle_urls) | set(b.js_bundle_urls)
+    m.websocket_urls = set(a.websocket_urls) | set(b.websocket_urls)
+    m.spa_routes = set(a.spa_routes) | set(b.spa_routes)
+    m.errors = a.errors + b.errors
+    m.pages_rendered = a.pages_rendered + b.pages_rendered
+    m.interactions_performed = a.interactions_performed + b.interactions_performed
+    m.max_depth_reached = max(a.max_depth_reached, b.max_depth_reached)
+    m.graph = attack_graph.merge_graphs(a.graph or {}, b.graph or {})
+    return m
+
+
+def _strategy_payload(res: BrowserCrawlResult) -> dict:
+    """Per-strategy crawl-layer summary: graph + discovery score + stats + log."""
+    stats = attack_graph.graph_stats(res.graph or {})
+    stats.update({
+        "pages_rendered": res.pages_rendered,
+        "interactions": res.interactions_performed,
+        "network_requests": len(res.network_requests),
+        "max_depth_reached": res.max_depth_reached,
+        "errors": len(res.errors),
+    })
+    return {
+        "strategy": res.strategy,
+        "graph": res.graph or {"nodes": [], "edges": [], "roots": [], "node_count": 0, "edge_count": 0},
+        "stats": stats,
+        "score": attack_graph.crawl_score(stats, interactions=res.interactions_performed),
+        "log": res.log[:500],
+    }
+
+
 async def run_deep_scan(
     scope: TargetScope,
     fast_result: FastScanResult,
@@ -109,7 +165,6 @@ async def run_deep_scan(
     passive_only: bool = False,
     auth_header: str | None = None,
     auth_header_b: str | None = None,
-    rate_limit_per_second: float = 0,
 ) -> DeepScanResult:
     client = build_async_client(
         timeout=settings.DEEP_REQUEST_TIMEOUT_SECONDS,
@@ -122,7 +177,6 @@ async def run_deep_scan(
         concurrency=settings.DEEP_CONCURRENCY,
         request_budget=settings.DEEP_MAX_REQUESTS,
         max_response_bytes=settings.DEFAULT_MAX_RESPONSE_BYTES,
-        rate_limit_per_second=rate_limit_per_second,
     )
     result = DeepScanResult()
 
@@ -145,23 +199,29 @@ async def run_deep_scan(
             name, sep, value = auth_header.partition(":")
             browser_auth_headers = {name.strip(): value.strip()} if sep else {"Authorization": auth_header}
 
-        # --- Discovery phase 1: static crawl + subdomains + directories + browser ---
-        crawl_result, subdomains, (dir_paths, dir_findings), browser_result = await asyncio.gather(
+        # --- Discovery phase 1: static crawl + subdomains + directories +
+        # two browser crawls (BFS + DFS, same interaction engine) ---
+        _seed = fast_result.homepage_url or scope.origin
+        crawl_result, subdomains, (dir_paths, dir_findings), bfs_result, dfs_result = await asyncio.gather(
             crawl(
                 fetcher, scope,
-                seed_url=fast_result.homepage_url or scope.origin,
+                seed_url=_seed,
                 seed_html=fast_result.homepage_text or None,
                 max_pages=settings.CRAWL_MAX_PAGES,
                 max_depth=settings.CRAWL_MAX_DEPTH,
             ),
             discover_subdomains(scope),
             discover_directories(fetcher, scope, not_found, passive_only=passive_only),
-            browser_crawl(scope, fast_result.homepage_url or scope.origin, auth_header=browser_auth_headers),
+            browser_crawl(scope, _seed, strategy="bfs", auth_header=browser_auth_headers),
+            browser_crawl(scope, _seed, strategy="dfs", auth_header=browser_auth_headers),
         )
+        # The union of both strategies feeds the rest of the pipeline, so
+        # nothing either one found is missed by the attack phase.
+        browser_result = _merge_browser_results(bfs_result, dfs_result)
         result.subdomains = subdomains
         crawl_limit_reached = (
             len(crawl_result.pages) >= settings.CRAWL_MAX_PAGES
-            or len(browser_result.pages) >= settings.BROWSER_CRAWL_MAX_PAGES
+            or max(len(bfs_result.pages), len(dfs_result.pages)) >= settings.BROWSER_CRAWL_MAX_PAGES
         )
         scan_errors = bool([e for e in browser_result.errors if "not installed" not in e.lower()])
         for p in crawl_result.pages:
@@ -284,6 +344,32 @@ async def run_deep_scan(
         result.attack_matrix = build_test_matrix(executions, inv)
         result.attack_coverage = per_attack_coverage(plan, executions)
         result.attack_logs = list(attack_log.records)
+        result.anomaly_scores = anomaly_engine.compute_anomaly(executions)
+
+        # --- Full attack-surface graph (§ interaction-driven discovery) ---
+        params_by_ep: dict[str, list[str]] = {}
+        for pm in inv.parameters:
+            params_by_ep.setdefault(pm.endpoint_id, []).append(pm.name)
+        endpoints_for_graph = [
+            {
+                "url": ep.url,
+                "method": ep.method or "GET",
+                "discovery": ep.kind or "discovery",
+                "params": params_by_ep.get(ep.endpoint_id, []),
+                "is_api": ep.kind == "api",
+                "is_form": ep.kind == "form",
+            }
+            for ep in inv.endpoints
+        ]
+        result.attack_graph = attack_graph.build_attack_graph(
+            scope.origin, getattr(browser_result, "graph", {}) or {}, endpoints_for_graph,
+        )
+        # Per-strategy crawl layer (BFS vs DFS): own graph, score, stats, log.
+        result.crawl_strategies = {
+            "bfs": _strategy_payload(bfs_result),
+            "dfs": _strategy_payload(dfs_result),
+        }
+
         cov = compute_coverage(inv, executions)
         result.coverage = cov.to_dict()
         debug_log("COVERAGE", f"ratio={cov.coverage_ratio} tested={cov.security_tests_executed} "

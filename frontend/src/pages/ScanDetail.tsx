@@ -4,10 +4,16 @@ import { scansApi } from "../services/api";
 import { SEVERITY_COLOR } from "../theme";
 import type {
   AttackCoverageEntry,
+  AttackGraph,
+  AttackGraphNode,
   AttackLogLevel,
   AttackLogRecord,
   AttackMatrixRow,
   AttackStatus,
+  CrawlLogRecord,
+  CrawlStats,
+  CrawlStrategies,
+  DomainAnomaly,
   Finding,
   RiskLevel,
   ScanSnapshot,
@@ -93,6 +99,46 @@ const LOG_LEVEL_STYLE: Record<
   ERROR: { bg: "#fbe7e7", fg: "#b91c1c", dot: "#dc2626" },
   ALERT: { bg: "#fbe3ef", fg: "#a1123f", dot: "#e11d48" },
 };
+
+const ANOMALY_LEVEL_COLOR: Record<string, string> = {
+  critical: "#b91c1c",
+  high: "#c2410c",
+  medium: "#b45309",
+  low: "#0369a1",
+  minimal: "#0f7a52",
+  not_tested: "#948972",
+};
+
+function anomalyColor(level: string): string {
+  return ANOMALY_LEVEL_COLOR[level] ?? "#948972";
+}
+
+/** Small horizontal 0–100 anomaly bar with a numeric label. */
+function AnomalyBar({
+  score,
+  level,
+}: {
+  score: number | null;
+  level: string;
+}) {
+  if (score === null) {
+    return <span className="text-xs text-[#b0a48c]">—</span>;
+  }
+  const color = anomalyColor(level);
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-[#e6dcca]">
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${Math.min(100, Math.max(0, score))}%`, background: color }}
+        />
+      </div>
+      <span className="tabular-nums text-xs font-semibold" style={{ color }}>
+        {score}
+      </span>
+    </div>
+  );
+}
 
 function StatusChip({ status }: { status: AttackStatus }) {
   const s = ATTACK_STATUS_STYLE[status] ?? ATTACK_STATUS_STYLE.NOT_APPLICABLE;
@@ -322,91 +368,7 @@ export default function ScanDetail() {
         </div>
       </div>
 
-      {/* Risk hero */}
-      <div
-        className="relative overflow-hidden rounded-2xl border p-6"
-        style={{
-          borderColor: `${accent}55`,
-          background: `linear-gradient(135deg, ${accent}26 0%, #fbf7ef 60%)`,
-        }}
-      >
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-[#6f6552]">
-              {!isTerminal && (
-                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#0369a1]" />
-              )}
-              {STATUS_LABEL[snap.status] ?? snap.status}
-            </div>
-            {isTerminal ? (
-              <div className="mt-1 flex items-baseline gap-3">
-                <span
-                  className="text-4xl font-bold capitalize"
-                  style={{ color: accent }}
-                >
-                  {RISK[riskLevel]?.label ?? "Minimal"}
-                </span>
-                <span className="text-sm text-[#6f6552]">overall risk</span>
-              </div>
-            ) : (
-              <div className="mt-1 text-2xl font-semibold text-[#4a4032]">
-                Analyzing…
-              </div>
-            )}
-          </div>
 
-          {isTerminal && <ScoreRing score={riskScore} color={accent} />}
-        </div>
-
-        {/* Severity bar, derived from the deduplicated findings */}
-        {isTerminal && totalSev > 0 && (
-          <div className="mt-5">
-            <div className="flex h-2 overflow-hidden rounded-full bg-[#e6dcca]">
-              {STAT_ORDER.map((s) =>
-                severityCounts[s] ? (
-                  <div
-                    key={s}
-                    style={{
-                      width: `${(severityCounts[s] / totalSev) * 100}%`,
-                      background: SEV[s],
-                    }}
-                  />
-                ) : null,
-              )}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6f6552]">
-              {STAT_ORDER.filter((s) => severityCounts[s]).map((s) => (
-                <span key={s} className="inline-flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full" style={{ background: SEV[s] }} />
-                  <span className="capitalize">{s}</span>
-                  <span className="font-semibold text-[#4a4032]">{severityCounts[s]}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {isTerminal &&
-          (snap.assessment_confidence ||
-            typeof snap.assessment_coverage === "number") && (
-          <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-[#e3d8c4] pt-4">
-            <span className="text-xs uppercase tracking-widest text-[#6f6552]">
-              Assessment
-            </span>
-            {snap.assessment_confidence && (
-              <ConfidenceBadge confidence={snap.assessment_confidence} />
-            )}
-            {typeof snap.assessment_coverage === "number" && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#e3d8c4] bg-[#fbf7ef] px-2.5 py-1 text-xs font-semibold text-[#4a4032]">
-                Coverage {snap.assessment_coverage}%
-              </span>
-            )}
-          </div>
-        )}
-        {isTerminal && snap.assessment_warning && (
-          <p className="mt-2 text-xs text-[#8a6d1f]">{snap.assessment_warning}</p>
-        )}
-      </div>
 
       {/* Progress while running */}
       {!isTerminal && (
@@ -465,13 +427,18 @@ export default function ScanDetail() {
         </Panel>
       )}
 
+      {/* Overall anomaly score — the baseline-vs-fuzz suspicion signal. */}
+      {isTerminal && snap.anomaly && snap.anomaly.overall.domains_tested > 0 && (
+        <AnomalyOverviewPanel anomaly={snap.anomaly} />
+      )}
+
       {/* Attack Coverage — the attack modules and their per-attack rollup.
-          Each row expands to reveal that attack's production JSON logs. */}
+          Each row shows its anomaly score and expands to its production JSON logs. */}
       {attackRows.length > 0 && (
         <Panel title="Attack Coverage">
           <p className="mb-3 text-xs text-[#948972]">
-            Click any attack to expand its production JSON logs — every attempt is
-            recorded, whether it found a vulnerability or not.
+            Click any attack to expand its baseline-vs-fuzz anomaly breakdown and
+            production JSON logs — every attempt is recorded, vulnerable or not.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
@@ -479,7 +446,7 @@ export default function ScanDetail() {
                 <tr className="text-left text-[11px] uppercase tracking-wide text-[#948972]">
                   <th className="py-2 pr-3 font-medium">Attack</th>
                   <th className="py-2 pr-3 font-medium">Status</th>
-                  <th className="py-2 pr-3 text-right font-medium">Eligible</th>
+                  <th className="py-2 pr-3 font-medium">Anomaly</th>
                   <th className="py-2 pr-3 text-right font-medium">Tested</th>
                   <th className="py-2 pr-3 text-right font-medium">Vulnerable</th>
                   <th className="py-2 text-right font-medium">Logs</th>
@@ -493,6 +460,7 @@ export default function ScanDetail() {
                     <AttackCoverageRow
                       key={a.attack}
                       attack={a}
+                      anomaly={snap.anomaly?.domains?.[a.attack]}
                       logs={logs}
                       open={open}
                       onToggle={() =>
@@ -505,6 +473,15 @@ export default function ScanDetail() {
             </table>
           </div>
         </Panel>
+      )}
+
+      {/* Attack Surface Graph — Combined / BFS / DFS, node-link or tree view */}
+      {snap.attack_graph && (snap.attack_graph.node_count ?? 0) > 0 && (
+        <AttackSurfaceGraphPanel
+          combined={snap.attack_graph}
+          strategies={snap.crawl_strategies}
+          target={target}
+        />
       )}
 
       {/* Test Matrix — every (endpoint, parameter, attack) cell and its outcome */}
@@ -867,11 +844,13 @@ function AttackLogView({ records }: { records: AttackLogRecord[] }) {
 
 function AttackCoverageRow({
   attack,
+  anomaly,
   logs,
   open,
   onToggle,
 }: {
   attack: AttackCoverageEntry;
+  anomaly?: DomainAnomaly;
   logs: AttackLogRecord[];
   open: boolean;
   onToggle: () => void;
@@ -893,8 +872,11 @@ function AttackCoverageRow({
         <td className="py-2 pr-3">
           <StatusChip status={attack.status} />
         </td>
-        <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
-          {attack.eligible}
+        <td className="py-2 pr-3">
+          <AnomalyBar
+            score={anomaly?.score ?? null}
+            level={anomaly?.level ?? "not_tested"}
+          />
         </td>
         <td className="py-2 pr-3 text-right tabular-nums text-[#4a4032]">
           {attack.tested}
@@ -912,11 +894,604 @@ function AttackCoverageRow({
       {open && (
         <tr className="border-t border-[#e6dcca] bg-[#fbf7ef]">
           <td colSpan={6} className="px-2 py-3">
+            {anomaly && anomaly.score !== null && (
+              <AnomalyBreakdown anomaly={anomaly} />
+            )}
             <AttackLogView records={logs} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+function AnomalyBreakdown({ anomaly }: { anomaly: DomainAnomaly }) {
+  const color = anomalyColor(anomaly.level);
+  const cells: Array<[string, string]> = [
+    ["Anomaly score", `${anomaly.score} / 100`],
+    ["Level", anomaly.level],
+    ["Peak probe", anomaly.max.toFixed(2)],
+    ["Mean probe", anomaly.mean.toFixed(2)],
+    ["Tested", String(anomaly.tested)],
+    ["Anomalous", String(anomaly.anomalous)],
+    ["Measured diffs", String(anomaly.measured)],
+    ["Vulnerable", String(anomaly.vulnerable)],
+  ];
+  return (
+    <div className="mb-3 rounded-lg border border-[#e6dcca] bg-[#fcf8f0] p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[11px] uppercase tracking-wide text-[#948972]">
+          Baseline-vs-fuzz anomaly
+        </span>
+        <span
+          className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase"
+          style={{ background: `${color}22`, color }}
+        >
+          {anomaly.level}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+        {cells.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-2">
+            <span className="text-[#948972]">{k}</span>
+            <span className="font-semibold text-[#4a4032]">{v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AnomalyOverviewPanel({ anomaly }: { anomaly: NonNullable<ScanSnapshot["anomaly"]> }) {
+  const { overall, domains } = anomaly;
+  const color = anomalyColor(overall.level);
+  const ranked = Object.values(domains)
+    .filter((d) => d.score !== null)
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    .slice(0, 6);
+  return (
+    <Panel title="Anomaly Score" accent={color}>
+      <p className="mb-4 text-xs text-[#948972]">
+        How anomalously the application behaved under attack, scored by comparing
+        each fuzz response against its baseline. A suspicion signal — separate
+        from the finding-severity risk score.
+      </p>
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-4">
+          <ScoreRing score={overall.score} color={color} />
+          <div>
+            <div className="text-2xl font-bold capitalize" style={{ color }}>
+              {overall.level}
+            </div>
+            <div className="text-xs text-[#6f6552]">
+              {overall.domains_anomalous} of {overall.domains_tested} tested
+              domains anomalous
+            </div>
+            {overall.top_domain_display && (
+              <div className="mt-1 text-xs text-[#6f6552]">
+                Peak: <span className="font-semibold text-[#4a4032]">
+                  {overall.top_domain_display}
+                </span>{" "}
+                ({overall.top_domain_score})
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex-1 space-y-1.5">
+          {ranked.map((d) => (
+            <div key={d.attack} className="flex items-center gap-3">
+              <span className="w-44 shrink-0 truncate text-xs text-[#4a4032]">
+                {d.display}
+              </span>
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#e6dcca]">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, d.score ?? 0))}%`,
+                    background: anomalyColor(d.level),
+                  }}
+                />
+              </div>
+              <span
+                className="w-8 shrink-0 text-right tabular-nums text-xs font-semibold"
+                style={{ color: anomalyColor(d.level) }}
+              >
+                {d.score}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+/* --------------------------- attack-surface graph ------------------------ */
+
+function scoreColor(score: number): string {
+  if (score >= 60) return "#b91c1c";
+  if (score >= 40) return "#c2410c";
+  if (score >= 20) return "#b45309";
+  return "#0f7a52";
+}
+
+function graphToDot(graph: AttackGraph): string {
+  const idx = new Map<string, number>();
+  graph.nodes.forEach((n, i) => idx.set(n.id, i));
+  const esc = (s: string) => (s || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const lines: string[] = [
+    "digraph attack_surface {",
+    "  rankdir=LR;",
+    '  node [shape=box, style=rounded, fontname="Helvetica", fontsize=10];',
+  ];
+  for (const n of graph.nodes) {
+    const i = idx.get(n.id)!;
+    if (n.synthetic) {
+      lines.push(`  n${i} [label="${esc(n.label)}", style="rounded,filled", fillcolor="#eeeeee"];`);
+    } else {
+      const extra = `\\nscore=${n.score}${n.param_count ? ` · ${n.param_count}p` : ""}`;
+      lines.push(`  n${i} [label="${esc(n.label)}${esc(extra)}"];`);
+    }
+  }
+  for (const e of graph.edges) {
+    const p = idx.get(e.parent);
+    const c = idx.get(e.child);
+    if (p === undefined || c === undefined) continue;
+    const lbl = e.via ? ` [label="${esc(e.via)}", fontsize=8]` : "";
+    lines.push(`  n${p} -> n${c}${lbl};`);
+  }
+  lines.push("}");
+  return lines.join("\n");
+}
+
+function download(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+const DISCOVERY_LABEL: Record<string, string> = {
+  seed: "seed",
+  page: "page",
+  link: "link",
+  form: "form",
+  "form-get": "form submit",
+  interaction: "interaction",
+  xhr: "XHR/fetch",
+  navigation: "navigation",
+  api: "API",
+  js_bundle: "JS bundle",
+  discovery: "discovery",
+  group: "group",
+};
+
+function GraphTreeNode({
+  node,
+  childrenMap,
+  nodeMap,
+  via,
+  depth,
+  ancestry,
+}: {
+  node: AttackGraphNode;
+  childrenMap: Map<string, Array<{ id: string; via: string }>>;
+  nodeMap: Map<string, AttackGraphNode>;
+  via: string;
+  depth: number;
+  ancestry: Set<string>;
+}) {
+  const kids = (childrenMap.get(node.id) ?? []).filter((k) => !ancestry.has(k.id));
+  const [open, setOpen] = useState(depth < 1);
+  const hasKids = kids.length > 0;
+  const color = node.synthetic ? "#948972" : scoreColor(node.score);
+  return (
+    <div>
+      <div
+        className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-[#f3ecdd]"
+        style={{ marginLeft: depth * 16 }}
+      >
+        <button
+          onClick={() => hasKids && setOpen((o) => !o)}
+          className={`w-3 shrink-0 text-[#b0a48c] ${hasKids ? "" : "invisible"}`}
+        >
+          {open ? "▾" : "▸"}
+        </button>
+        {!node.synthetic && (
+          <span
+            className="shrink-0 rounded px-1 py-0.5 text-[10px] font-bold tabular-nums"
+            style={{ background: `${color}22`, color }}
+            title="Attack-surface score"
+          >
+            {node.score}
+          </span>
+        )}
+        <span
+          className={`min-w-0 flex-1 truncate font-mono text-xs ${
+            node.synthetic ? "font-semibold text-[#6f6552]" : "text-[#3a3122]"
+          }`}
+          title={node.url || node.label}
+        >
+          {node.label}
+        </span>
+        {node.is_api && (
+          <span className="shrink-0 rounded bg-[#eaf2fb] px-1 text-[10px] font-semibold text-[#1d4ed8]">
+            API
+          </span>
+        )}
+        {node.is_form && (
+          <span className="shrink-0 rounded bg-[#f1ecfb] px-1 text-[10px] font-semibold text-[#6d4fb8]">
+            form
+          </span>
+        )}
+        {node.param_count > 0 && (
+          <span className="shrink-0 text-[10px] text-[#948972]">{node.param_count}p</span>
+        )}
+        {via && (
+          <span className="shrink-0 text-[10px] text-[#b0a48c]">{DISCOVERY_LABEL[via] ?? via}</span>
+        )}
+      </div>
+      {open &&
+        kids.map((k) => {
+          const child = nodeMap.get(k.id);
+          if (!child) return null;
+          return (
+            <GraphTreeNode
+              key={k.id}
+              node={child}
+              childrenMap={childrenMap}
+              nodeMap={nodeMap}
+              via={k.via}
+              depth={depth + 1}
+              ancestry={new Set([...ancestry, node.id])}
+            />
+          );
+        })}
+    </div>
+  );
+}
+
+function buildChildrenMap(graph: AttackGraph, nodeMap: Map<string, AttackGraphNode>) {
+  const m = new Map<string, Array<{ id: string; via: string }>>();
+  for (const e of graph.edges) {
+    if (!m.has(e.parent)) m.set(e.parent, []);
+    m.get(e.parent)!.push({ id: e.child, via: e.via });
+  }
+  for (const arr of m.values()) {
+    arr.sort((a, b) => (nodeMap.get(b.id)?.score ?? 0) - (nodeMap.get(a.id)?.score ?? 0));
+  }
+  return m;
+}
+
+function graphRoots(graph: AttackGraph): string[] {
+  return graph.roots.length
+    ? graph.roots
+    : graph.nodes.filter((n) => !graph.edges.some((e) => e.child === n.id)).map((n) => n.id);
+}
+
+function GraphTreeView({ graph }: { graph: AttackGraph }) {
+  const nodeMap = useMemo(() => {
+    const m = new Map<string, AttackGraphNode>();
+    for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph.nodes]);
+  const childrenMap = useMemo(() => buildChildrenMap(graph, nodeMap), [graph, nodeMap]);
+  const roots = graphRoots(graph);
+  return (
+    <div className="max-h-[32rem] overflow-auto rounded border border-[#e6dcca] bg-[#fcf8f0] p-2">
+      {roots.map((rid) => {
+        const root = nodeMap.get(rid);
+        if (!root) return null;
+        return (
+          <GraphTreeNode
+            key={rid}
+            node={root}
+            childrenMap={childrenMap}
+            nodeMap={nodeMap}
+            via=""
+            depth={0}
+            ancestry={new Set()}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+const GRAPH_NODE_CAP = 160;
+const COL_W = 210;
+const ROW_H = 40;
+const NODE_W = 178;
+const NODE_H = 26;
+const PAD = 14;
+
+/** Actual node-link graph: nodes laid out in columns by depth, edges drawn as
+ *  curves. Capped for readability on large surfaces. */
+function GraphNodeLink({ graph }: { graph: AttackGraph }) {
+  const layout = useMemo(() => {
+    const nodeMap = new Map<string, AttackGraphNode>();
+    for (const n of graph.nodes) nodeMap.set(n.id, n);
+    const childrenMap = buildChildrenMap(graph, nodeMap);
+    const roots = graphRoots(graph);
+
+    // Layer = shortest distance from a root (BFS over edges).
+    const layer = new Map<string, number>();
+    const q: string[] = [];
+    for (const r of roots) {
+      if (nodeMap.has(r)) {
+        layer.set(r, 0);
+        q.push(r);
+      }
+    }
+    while (q.length) {
+      const id = q.shift()!;
+      const l = layer.get(id)!;
+      for (const c of childrenMap.get(id) ?? []) {
+        if (!layer.has(c.id) && nodeMap.has(c.id)) {
+          layer.set(c.id, l + 1);
+          q.push(c.id);
+        }
+      }
+    }
+    for (const n of graph.nodes) if (!layer.has(n.id)) layer.set(n.id, n.depth || 0);
+
+    // Cap: keep the shallowest, highest-scoring nodes.
+    let kept = [...graph.nodes];
+    const truncated = kept.length > GRAPH_NODE_CAP;
+    if (truncated) {
+      kept = kept
+        .slice()
+        .sort((a, b) => (layer.get(a.id)! - layer.get(b.id)!) || b.score - a.score)
+        .slice(0, GRAPH_NODE_CAP);
+    }
+    const keptIds = new Set(kept.map((n) => n.id));
+
+    // Position: column by layer, stacked within the column.
+    const byLayer = new Map<number, AttackGraphNode[]>();
+    for (const n of kept) {
+      const l = layer.get(n.id)!;
+      if (!byLayer.has(l)) byLayer.set(l, []);
+      byLayer.get(l)!.push(n);
+    }
+    const pos = new Map<string, { x: number; y: number }>();
+    let maxRows = 0;
+    for (const [l, arr] of byLayer) {
+      arr.sort((a, b) => b.score - a.score);
+      arr.forEach((n, i) => pos.set(n.id, { x: l * COL_W + PAD, y: i * ROW_H + PAD }));
+      maxRows = Math.max(maxRows, arr.length);
+    }
+    const numLayers = Math.max(...[...byLayer.keys()].map((l) => l + 1), 1);
+    const edges = graph.edges.filter((e) => keptIds.has(e.parent) && keptIds.has(e.child));
+    return {
+      nodeMap,
+      kept,
+      edges,
+      pos,
+      width: numLayers * COL_W + PAD,
+      height: Math.max(maxRows * ROW_H + PAD, 60),
+      truncated,
+      total: graph.nodes.length,
+    };
+  }, [graph]);
+
+  if (!layout.kept.length) {
+    return <p className="py-4 text-xs text-[#948972]">No graph nodes.</p>;
+  }
+
+  return (
+    <div className="overflow-auto rounded border border-[#e6dcca] bg-[#fcf8f0]" style={{ maxHeight: "34rem" }}>
+      <svg width={layout.width} height={layout.height} style={{ display: "block", minWidth: "100%" }}>
+        {layout.edges.map((e, i) => {
+          const p = layout.pos.get(e.parent);
+          const c = layout.pos.get(e.child);
+          if (!p || !c) return null;
+          const x1 = p.x + NODE_W;
+          const y1 = p.y + NODE_H / 2;
+          const x2 = c.x;
+          const y2 = c.y + NODE_H / 2;
+          const mx = (x1 + x2) / 2;
+          return (
+            <path
+              key={i}
+              d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+              fill="none"
+              stroke="#d6c9b0"
+              strokeWidth={1}
+            />
+          );
+        })}
+        {layout.kept.map((n) => {
+          const p = layout.pos.get(n.id)!;
+          const color = n.synthetic ? "#948972" : scoreColor(n.score);
+          return (
+            <g key={n.id} transform={`translate(${p.x},${p.y})`}>
+              <title>{`${n.label}${n.url ? `\n${n.url}` : ""}${n.synthetic ? "" : `\nscore ${n.score} · ${n.param_count}p · ${n.discovery}`}`}</title>
+              <rect
+                width={NODE_W}
+                height={NODE_H}
+                rx={5}
+                fill={n.synthetic ? "#f0e9dc" : `${color}18`}
+                stroke={color}
+                strokeWidth={n.synthetic ? 1 : 1.4}
+              />
+              {!n.synthetic && <rect width={4} height={NODE_H} rx={2} fill={color} />}
+              <text x={10} y={NODE_H / 2 + 4} fontSize={11} fontFamily="ui-monospace, monospace" fill="#3a3122">
+                {n.label.length > 26 ? n.label.slice(0, 25) + "…" : n.label}
+              </text>
+              {!n.synthetic && (
+                <text x={NODE_W - 8} y={NODE_H / 2 + 4} fontSize={10} textAnchor="end" fontWeight="700" fill={color}>
+                  {n.score}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {layout.truncated && (
+        <p className="px-2 py-1 text-[11px] text-[#948972]">
+          Showing {GRAPH_NODE_CAP} of {layout.total} nodes (shallowest, highest-scoring). Download the
+          JSON/DOT for the full graph.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const CRAWL_EVENT_STYLE: Record<string, { fg: string; bg: string }> = {
+  navigate: { fg: "#1d4ed8", bg: "#eaf2fb" },
+  interact: { fg: "#6d4fb8", bg: "#f1ecfb" },
+  discover: { fg: "#0f7a52", bg: "#e7f4ec" },
+  error: { fg: "#b91c1c", bg: "#fbe7e7" },
+};
+
+function CrawlLogView({ log }: { log: CrawlLogRecord[] }) {
+  const [open, setOpen] = useState(false);
+  if (!log.length) return null;
+  return (
+    <div className="mt-3">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="text-xs font-medium text-[#6f6552] hover:text-[#3a3122]"
+      >
+        {open ? "▾" : "▸"} Crawl log ({log.length})
+      </button>
+      {open && (
+        <div className="mt-2 max-h-[20rem] overflow-auto rounded border border-[#e6dcca] bg-[#fcf8f0] px-2">
+          {log.map((r) => {
+            const s = CRAWL_EVENT_STYLE[r.event] ?? { fg: "#6f6552", bg: "#eee" };
+            return (
+              <div key={r.seq} className="flex items-start gap-2 border-b border-[#efe7d6] py-1 font-mono text-[11px] last:border-b-0">
+                <span className="shrink-0 text-[#b0a48c]">{fmtLogTime(r.timestamp)}</span>
+                <span
+                  className="shrink-0 rounded px-1 text-[10px] font-bold uppercase"
+                  style={{ background: s.bg, color: s.fg }}
+                >
+                  {r.event}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[#4a4032]" title={r.url || r.detail}>
+                  {r.detail ? `${r.detail} ` : ""}
+                  {r.url}
+                </span>
+                {typeof r.depth === "number" && <span className="shrink-0 text-[#b0a48c]">d{r.depth}</span>}
+                {typeof r.score === "number" && <span className="shrink-0 text-[#948972]">s{r.score}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StrategyStatsRow({ stats, score }: { stats: CrawlStats; score: number }) {
+  const cells: Array<[string, string | number]> = [
+    ["Discovery score", `${score}/100`],
+    ["Endpoints", stats.endpoints],
+    ["APIs", stats.apis],
+    ["Forms", stats.forms],
+    ["Params", stats.params],
+    ["Interactions", stats.interactions],
+    ["Pages rendered", stats.pages_rendered],
+    ["Max depth", stats.max_depth_reached],
+  ];
+  return (
+    <div className="mb-3 grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-[#e6dcca] bg-[#fcf8f0] p-3 text-xs sm:grid-cols-4">
+      {cells.map(([k, v]) => (
+        <div key={k} className="flex justify-between gap-2">
+          <span className="text-[#948972]">{k}</span>
+          <span className="font-semibold text-[#4a4032]">{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AttackSurfaceGraphPanel({
+  combined,
+  strategies,
+  target,
+}: {
+  combined: AttackGraph;
+  strategies?: CrawlStrategies;
+  target: string;
+}) {
+  type Sel = "combined" | "bfs" | "dfs";
+  const [sel, setSel] = useState<Sel>("combined");
+  const [view, setView] = useState<"graph" | "tree">("graph");
+
+  const active =
+    sel === "combined" ? combined : strategies?.[sel]?.graph ?? combined;
+  const strat = sel === "combined" ? undefined : strategies?.[sel];
+  const safeName = `${(target || "scan").replace(/[^a-z0-9.-]+/gi, "_").slice(0, 40)}-${sel}`;
+
+  const tab = (key: Sel, label: string, score?: number) => (
+    <button
+      onClick={() => setSel(key)}
+      className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+        sel === key ? "bg-[#c2410c] text-white" : "border border-[#d6c9b0] text-[#4a4032] hover:bg-[#e6dcca]"
+      }`}
+    >
+      {label}
+      {typeof score === "number" && (
+        <span className={`ml-1.5 tabular-nums ${sel === key ? "text-white/80" : "text-[#948972]"}`}>
+          {score}
+        </span>
+      )}
+    </button>
+  );
+
+  return (
+    <Panel title={`Attack Surface Graph (${active.node_count} nodes, ${active.edge_count} edges)`}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {tab("combined", "Combined")}
+        {strategies && tab("bfs", "BFS", strategies.bfs?.score)}
+        {strategies && tab("dfs", "DFS", strategies.dfs?.score)}
+        <span className="mx-1 h-4 w-px bg-[#d6c9b0]" />
+        <button
+          onClick={() => setView("graph")}
+          className={`rounded px-2 py-1 text-xs ${view === "graph" ? "bg-[#e6dcca] font-semibold text-[#3a3122]" : "text-[#6f6552]"}`}
+        >
+          Graph
+        </button>
+        <button
+          onClick={() => setView("tree")}
+          className={`rounded px-2 py-1 text-xs ${view === "tree" ? "bg-[#e6dcca] font-semibold text-[#3a3122]" : "text-[#6f6552]"}`}
+        >
+          Tree
+        </button>
+        <div className="ml-auto flex gap-2">
+          <button
+            onClick={() => download(`attack-surface-${safeName}.json`, JSON.stringify(active, null, 2), "application/json")}
+            className="rounded border border-[#d6c9b0] px-2 py-1 text-xs text-[#4a4032] hover:bg-[#e6dcca]"
+          >
+            JSON
+          </button>
+          <button
+            onClick={() => download(`attack-surface-${safeName}.dot`, graphToDot(active), "text/vnd.graphviz")}
+            className="rounded border border-[#d6c9b0] px-2 py-1 text-xs text-[#4a4032] hover:bg-[#e6dcca]"
+          >
+            DOT
+          </button>
+        </div>
+      </div>
+
+      <p className="mb-3 text-xs text-[#948972]">
+        {sel === "combined"
+          ? "Union of both crawl strategies. Endpoints are de-duplicated by shape (/users/1 and /users/2 collapse to one)."
+          : `${sel.toUpperCase()} crawl only — its own discovered surface, score, and log.`}
+      </p>
+
+      {strat && <StrategyStatsRow stats={strat.stats} score={strat.score} />}
+
+      {view === "graph" ? <GraphNodeLink graph={active} /> : <GraphTreeView graph={active} />}
+
+      {strat && <CrawlLogView log={strat.log} />}
+    </Panel>
   );
 }
 
@@ -963,7 +1538,7 @@ function buildReportHtml(
 
   const riskBadge = `<span class="risk" style="background:${
     SEV_HEX[riskLevel] ?? "#8a8173"
-  }">${esc(riskLevel || "minimal")} · ${riskScore}/100</span>`;
+  }">${esc(riskLevel || "minimal")}</span>`;
 
   const COVERAGE_STATUS: Record<string, string> = {
     NOT_APPLICABLE: '<span style="color:#999">N/A</span>',

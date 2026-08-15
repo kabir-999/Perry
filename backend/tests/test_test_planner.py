@@ -17,10 +17,12 @@ def _inv():
 def test_each_attack_only_selects_eligible_targets():
     inv = _inv()
     ec = eligible_counts(plan_tests(inv))
-    # path traversal only for the file-ish param
-    assert ec[C.PATH_TRAVERSAL] == 1
-    # open redirect only for the redirect-ish param
-    assert ec[C.OPEN_REDIRECT] == 1
+    # path traversal is now probed on ALL injectable params (name heuristics
+    # only prioritise) — q, file, next (query) + email (json) = 4.
+    assert ec[C.PATH_TRAVERSAL] == 4
+    # open redirect is probed on all query/form params — q, file, next = 3
+    # (email is a json body param, not a navigation destination).
+    assert ec[C.OPEN_REDIRECT] == 3
     # file upload only for the upload endpoint
     assert ec[C.FILE_UPLOAD] == 1
     # SQLi applies to all 4 injectable params

@@ -47,17 +47,16 @@ export default function ProjectChart({
               stroke="#78716c"
               tick={{ fontSize: 11 }}
               allowDecimals={false}
-              domain={[0, 100]}
             />
             <Tooltip
               contentStyle={{ background: "#fbf7ef", border: "1px solid #e6dcca" }}
               formatter={(value: number, name: string) =>
-                name === "risk_score" ? [value, "Risk score"] : [value, "Findings"]
+                name === "findings_count" ? [value, "Findings"] : [value, name]
               }
             />
             <Line
               type="monotone"
-              dataKey="risk_score"
+              dataKey="findings_count"
               stroke={PALETTE.ember}
               strokeWidth={2}
               dot={{ r: 4, fill: PALETTE.ember, strokeWidth: 0 }}

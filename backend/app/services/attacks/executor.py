@@ -40,6 +40,9 @@ class TestExecution:
     response_summary: str = ""
     evidence: str = ""
     finding: FindingCandidate | None = None
+    # Measured baseline-vs-fuzz anomaly magnitude in [0,1]; 0.0 when not
+    # measured (the anomaly engine then derives it from the status).
+    anomaly: float = 0.0
 
 
 @dataclass

@@ -18,7 +18,7 @@ export default function RiskCell({ scan }: { scan: Scan }) {
       className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs capitalize"
       style={{ color: hex, borderColor: `${hex}55`, background: `${hex}18` }}
     >
-      {scan.final_risk || "minimal"} · {scan.risk_score}
+      {scan.final_risk || "minimal"}
     </span>
   );
 }
