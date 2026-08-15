@@ -23,6 +23,7 @@ from app.services.attacks import catalog as C
 from app.services.debug_log import debug_log
 from app.services.finding_types import FindingCandidate
 from app.services.inventory import AttackSurfaceInventory
+from app.services.response_analyzer import NotFoundProfile
 from app.services.test_planner import PlannedTest
 from app.services.test_status import TestStatus
 
@@ -54,7 +55,12 @@ class AttackContext:
     passive_only: bool = False
     auth_header: str | None = None
     auth_header_b: str | None = None
-    not_found: object = None
+    # Defaults to an empty (permissive) profile, never None, so a caller that
+    # doesn't set this explicitly (e.g. a test exercising an unrelated
+    # attack) can't crash a check that requires it — it behaves exactly like
+    # a site where learn_not_found_profile() found no distinctive not-found
+    # baseline to learn.
+    not_found: NotFoundProfile = field(default_factory=NotFoundProfile)
     # Findings already collected during discovery (headers/cookies/cors/
     # dir-listing/debug/sensitive-files/source-maps/vhost) — the raw material
     # for the evidence-driven attack modules.

@@ -647,8 +647,11 @@ async def check_path_traversal_on_path(
     ]
 
 
-# Paths whose data is sensitive enough that serving it unauthenticated is a
-# finding worth surfacing (Groq decides final severity).
+# A path matching this is only ever used to *narrow which endpoints get the
+# extra scrutiny below* — it is a targeting heuristic, never evidence on its
+# own. "/dashboard" existing proves nothing; what matters is what a real,
+# baseline-checked response from it actually contains and how it behaves
+# with vs without a credential.
 _SENSITIVE_API_RE = re.compile(
     r"(?i)/(users?|accounts?|admin|config|settings|secrets?|keys?|tokens?|"
     r"orders?|payments?|invoices?|customers?|profiles?)(/|$|\?)"
@@ -656,11 +659,24 @@ _SENSITIVE_API_RE = re.compile(
 
 
 async def check_api_security(
-    fetcher: Fetcher, api_urls: list[str], *, max_endpoints: int = 15
+    fetcher: Fetcher,
+    api_urls: list[str],
+    not_found: NotFoundProfile,
+    *,
+    max_endpoints: int = 15,
 ) -> list[FindingCandidate]:
     """Safe, read-only checks over discovered API endpoints: insecure
     transport and sensitive data served without an auth challenge. Never
-    attempts auth bypass, brute force, or access to another user's data."""
+    attempts auth bypass, brute force, or access to another user's data.
+
+    ``not_found`` (the site's learned not-found/SPA-fallback/blanket-auth-gate
+    baseline, see ``learn_not_found_profile``) gates the sensitive-data
+    finding below: a URL whose response is indistinguishable from the site's
+    catch-all behavior is never treated as a real hit just because its path
+    contains a sensitive-looking keyword. Discovering "this looks like an API
+    endpoint" is not the same claim as "this endpoint has a vulnerability" —
+    only a response that survives baseline comparison does.
+    """
     findings: list[FindingCandidate] = []
     checked = 0
     for url in api_urls:
@@ -676,7 +692,9 @@ async def check_api_security(
 
         path = urlparse(res.requested_url).path
 
-        # Insecure transport for an API.
+        # Insecure transport for an API. This is transport-level fact
+        # (scheme observed on the wire), not content-dependent, so it isn't
+        # gated on the not-found baseline.
         if urlparse(res.url).scheme == "http":
             findings.append(
                 FindingCandidate(
@@ -696,7 +714,9 @@ async def check_api_security(
                 )
             )
 
-        # Sensitive data returned without an auth challenge.
+        # Sensitive data returned without an auth challenge. The path-keyword
+        # match only decides which endpoints get this extra scrutiny; the
+        # actual evidence is the real (non-baseline) 200 JSON response itself.
         is_json = "json" in res.content_type.lower()
         has_auth_challenge = (
             res.status_code in (401, 403)
@@ -708,6 +728,7 @@ async def check_api_security(
             and not has_auth_challenge
             and _SENSITIVE_API_RE.search(path)
             and res.body_bytes > 2
+            and not_found.is_real_hit(analyze(res), path)
         ):
             findings.append(
                 FindingCandidate(
@@ -717,7 +738,8 @@ async def check_api_security(
                     confidence="potential",
                     url=res.url,
                     evidence=f"GET {path} returned 200 JSON ({res.body_bytes} "
-                    "bytes) with no authentication challenge.",
+                    "bytes) with no authentication challenge, distinct from "
+                    "the site's not-found/catch-all baseline.",
                     response_summary=res.text[:300],
                     description="A sensitive-looking API endpoint returned data "
                     "without requiring authentication.",
@@ -843,7 +865,7 @@ async def check_upload_endpoint(fetcher: Fetcher, upload) -> list[FindingCandida
 
 
 async def check_authz_boundary(
-    fetcher: Fetcher, url: str, auth_header: str | None
+    fetcher: Fetcher, url: str, auth_header: str | None, not_found: NotFoundProfile
 ) -> list[FindingCandidate]:
     """Differential auth check using exactly one dev-supplied credential.
 
@@ -856,6 +878,15 @@ async def check_authz_boundary(
     another identity's credential, and never fabricates a finding when no
     credential was supplied — callers should record that as inconclusive
     instead of calling this at all.
+
+    Redirects are never auto-followed: a protected endpoint that 3xx's to a
+    login page must not have that page's status/body attributed back to the
+    probed URL — otherwise "both requests ended up on the login page" (a
+    sign auth *is* enforced) looks identical to "both requests got the real
+    resource" (a sign it isn't). ``not_found`` further rejects the case where
+    both responses are merely the site's own not-found/SPA-fallback/blanket
+    error page for every path, which would otherwise be byte-identical
+    regardless of any credential and has nothing to do with authorization.
     """
     if not auth_header:
         return []
@@ -865,8 +896,8 @@ async def check_authz_boundary(
         if sep
         else {"Authorization": auth_header}
     )
-    unauth = await fetcher.fetch(url, use_cache=True)
-    authed = await fetcher.fetch(url, headers=headers, use_cache=False)
+    unauth = await fetcher.fetch(url, use_cache=True, follow_redirects=False)
+    authed = await fetcher.fetch(url, headers=headers, use_cache=False, follow_redirects=False)
     if not unauth.ok or not authed.ok:
         return []
     path = urlparse(url).path
@@ -876,6 +907,7 @@ async def check_authz_boundary(
         and unauth.text == authed.text
         and unauth.body_bytes > 2
         and _SENSITIVE_API_RE.search(path)
+        and not_found.is_real_hit(analyze(unauth), path)
     ):
         return [
             FindingCandidate(
@@ -912,7 +944,11 @@ def _header_dict(auth_header: str) -> dict[str, str]:
 
 
 async def check_two_account_authorization(
-    fetcher: Fetcher, url: str, auth_header_a: str | None, auth_header_b: str | None
+    fetcher: Fetcher,
+    url: str,
+    auth_header_a: str | None,
+    auth_header_b: str | None,
+    not_found: NotFoundProfile,
 ) -> list[FindingCandidate]:
     """Two-scanner-account authorization/IDOR (BOLA) check.
 
@@ -929,13 +965,21 @@ async def check_two_account_authorization(
     content indistinguishable from Account A's response for the *same*
     resource id — the strongest signal available without a domain model of
     what "belongs to" A vs B, and evidence includes both raw responses so the
-    report is reproducible, never a guess.
+    report is reproducible, never a guess. Redirects aren't auto-followed
+    (both accounts landing on the same login/error page after a 3xx would
+    otherwise look identical to both reaching the real shared resource), and
+    ``not_found`` rejects a match against the site's own not-found/SPA
+    fallback/blanket error page.
     """
     if not auth_header_a or not auth_header_b:
         return []
 
-    resp_a = await fetcher.fetch(url, headers=_header_dict(auth_header_a), use_cache=False)
-    resp_b = await fetcher.fetch(url, headers=_header_dict(auth_header_b), use_cache=False)
+    resp_a = await fetcher.fetch(
+        url, headers=_header_dict(auth_header_a), use_cache=False, follow_redirects=False
+    )
+    resp_b = await fetcher.fetch(
+        url, headers=_header_dict(auth_header_b), use_cache=False, follow_redirects=False
+    )
     if not resp_a.ok or not resp_b.ok:
         return []
     if resp_a.status_code != 200 or resp_b.status_code != 200:
@@ -944,6 +988,8 @@ async def check_two_account_authorization(
         return []
 
     path = urlparse(url).path
+    if not not_found.is_real_hit(analyze(resp_a), path):
+        return []
     return [
         FindingCandidate(
             title="Broken object-level authorization: second account can read another account's resource",

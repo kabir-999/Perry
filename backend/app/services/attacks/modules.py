@@ -423,7 +423,10 @@ async def run_file_upload(plan, ctx: AttackContext):
 async def run_api_authentication(plan, ctx: AttackContext):
     api_urls = [ctx.inventory.endpoint(pt.endpoint_id).url for pt in plan
                 if ctx.inventory.endpoint(pt.endpoint_id)]
-    findings = await security_checks.check_api_security(ctx.fetcher, api_urls) if api_urls else []
+    findings = (
+        await security_checks.check_api_security(ctx.fetcher, api_urls, ctx.not_found)
+        if api_urls else []
+    )
     finding_by_path = {}
     for f in findings:
         finding_by_path.setdefault(urlsplit(f.url).path, f)
@@ -467,10 +470,11 @@ async def run_auth(plan, ctx: AttackContext):
             continue
         findings: list[FindingCandidate] = []
         for api in ctx.inventory.api_endpoints()[:15]:
-            findings += await security_checks.check_authz_boundary(ctx.fetcher, api.url, ctx.auth_header)
+            findings += await security_checks.check_authz_boundary(
+                ctx.fetcher, api.url, ctx.auth_header, ctx.not_found)
             if ctx.auth_header_b:
                 findings += await security_checks.check_two_account_authorization(
-                    ctx.fetcher, api.url, ctx.auth_header, ctx.auth_header_b)
+                    ctx.fetcher, api.url, ctx.auth_header, ctx.auth_header_b, ctx.not_found)
         if findings:
             out.append(_exec(pt, TestStatus.VULNERABLE, confidence=findings[0].confidence,
                              evidence=findings[0].evidence, finding=findings[0]))
