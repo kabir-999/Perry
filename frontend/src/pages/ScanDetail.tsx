@@ -15,13 +15,11 @@ import type {
   CrawlStrategies,
   DomainAnomaly,
   Finding,
-  RiskLevel,
   ScanSnapshot,
 } from "../types";
 
 const TERMINAL = ["completed", "failed", "cancelled"];
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
-const STAT_ORDER = ["critical", "high", "medium", "low", "minimal"];
 
 const CHECK_GROUPS = [
   "Headers",
@@ -31,31 +29,7 @@ const CHECK_GROUPS = [
   "Input Validation",
 ];
 
-const STATUS_LABEL: Record<string, string> = {
-  queued: "Queued",
-  fast_scanning: "Fast scan",
-  initial_result_ready: "Initial result",
-  deep_scanning: "Deep scan",
-  ai_analysis: "AI analysis",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled",
-  pending: "Pending",
-  running: "Running",
-};
-
-const RISK: Record<string, { hex: string; label: string }> = {
-  critical: { hex: SEVERITY_COLOR.critical, label: "Critical" },
-  high: { hex: SEVERITY_COLOR.high, label: "High" },
-  medium: { hex: SEVERITY_COLOR.medium, label: "Medium" },
-  low: { hex: SEVERITY_COLOR.low, label: "Low" },
-  minimal: { hex: SEVERITY_COLOR.minimal, label: "Minimal" },
-};
 const SEV: Record<string, string> = SEVERITY_COLOR;
-
-function riskHex(level: string): string {
-  return RISK[level]?.hex ?? "#8a8173";
-}
 
 // MUST-run modules first, then the ADVANCED ones. Attacks not listed here
 // fall back to object order.
@@ -222,25 +196,6 @@ export default function ScanDetail() {
 
   const fast = snap?.fast_result ?? null;
   const target = fast?.target || snap?.id || "";
-  // The deterministic engine owns the score: overall_risk = highest confirmed
-  // finding, always present; final_risk is its categorical level.
-  const riskLevel: RiskLevel = (snap?.final_risk ?? "") as RiskLevel;
-  const riskScore = snap?.overall_risk ?? snap?.risk_score ?? 0;
-
-  // Severity distribution derived from the deduplicated findings.
-  const severityCounts = useMemo(() => {
-    const c: Record<string, number> = {
-      critical: 0,
-      high: 0,
-      medium: 0,
-      low: 0,
-      minimal: 0,
-      info: 0,
-    };
-    for (const f of findings) c[f.severity] = (c[f.severity] ?? 0) + 1;
-    return c;
-  }, [findings]);
-  const totalSev = STAT_ORDER.reduce((n, k) => n + (severityCounts[k] ?? 0), 0);
 
   const checksDone = useMemo(
     () => new Set(snap?.checks_done ?? []),
@@ -331,8 +286,6 @@ export default function ScanDetail() {
       </div>
     );
   }
-
-  const accent = isTerminal ? riskHex(riskLevel || "minimal") : "#8a8173";
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
@@ -574,26 +527,6 @@ export default function ScanDetail() {
 }
 
 /* ------------------------------- components ------------------------------ */
-
-const CONFIDENCE_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
-  HIGH: { bg: "#e7f4ec", fg: "#0f7a52", label: "High confidence" },
-  MEDIUM: { bg: "#fdf3e3", fg: "#b45309", label: "Medium confidence" },
-  LOW: { bg: "#fdf3e3", fg: "#b45309", label: "Low confidence" },
-  INSUFFICIENT: { bg: "#fbe7e7", fg: "#b91c1c", label: "Insufficient confidence" },
-};
-
-function ConfidenceBadge({ confidence }: { confidence: string }) {
-  const style = CONFIDENCE_STYLE[confidence];
-  if (!style) return null;
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-      style={{ background: style.bg, color: style.fg }}
-    >
-      {style.label}
-    </span>
-  );
-}
 
 function ScoreRing({ score, color }: { score: number; color: string }) {
   const r = 30;
@@ -1516,7 +1449,6 @@ function buildReportHtml(
   findings: Finding[],
 ): string {
   const riskLevel = snap.final_risk ?? "";
-  const riskScore = snap.overall_risk ?? snap.risk_score ?? 0;
 
   const findingRows = findings
     .map((f) => {
