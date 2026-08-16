@@ -82,6 +82,19 @@ _DESTRUCTIVE = re.compile(
 )
 
 _BENIGN_INPUT = "test"
+# Per-type overrides: a value that fails the input's own HTML5 format
+# constraint (e.g. "test" in type="email") blocks the submit exactly like an
+# empty required field would, so the generic fallback isn't safe for every
+# type — this doesn't need to be a *good* value, just one the browser's
+# native validation accepts before the crawl can observe what the page's own
+# JS does with it.
+_BENIGN_INPUT_BY_TYPE: dict[str, str] = {
+    "email": "sentinel-crawl@example.com",
+    "url": "https://example.com",
+    "number": "1",
+    "tel": "5555555555",
+    "password": "Sentinel-Crawl-1",
+}
 _LOG_CAP = 800
 
 
@@ -378,13 +391,28 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             form_label = (await fh.get_attribute("id") or "") + " " + (await fh.get_attribute("class") or "")
             if _DESTRUCTIVE.search(form_label):
                 continue
+            # Password fields are deliberately included here even though this
+            # is the "GET form" pass: leaving a required password input empty
+            # doesn't skip the submission, it silently blocks it — the
+            # browser's own HTML5 constraint validation refuses to fire the
+            # submit event at all, so a login form's JS handler (and the
+            # real fetch/XHR to the backend it makes) never runs, and the
+            # crawler never sees the API call it exists to capture.
             text_inputs = await fh.query_selector_all(
                 "input:not([type]), input[type='text'], input[type='search'], "
-                "input[type='email'], input[type='number'], input[type='url'], textarea"
+                "input[type='email'], input[type='number'], input[type='url'], "
+                "input[type='password'], textarea"
             )
             for ti in text_inputs[:6]:
                 try:
-                    await ti.fill(_BENIGN_INPUT)
+                    # A value that doesn't match the input's own format
+                    # constraint (e.g. "test" in a type="email" field) hits
+                    # the exact same silent-block problem as an empty
+                    # required field: native constraint validation refuses
+                    # the submit before any JS handler runs.
+                    itype = (await ti.get_attribute("type") or "").lower()
+                    value = _BENIGN_INPUT_BY_TYPE.get(itype, _BENIGN_INPUT)
+                    await ti.fill(value)
                 except Exception:
                     pass
             before = page.url

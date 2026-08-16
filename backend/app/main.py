@@ -38,6 +38,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """A pure JSON API serves no scripts/styles/frames of its own, so these
+    are maximally restrictive rather than tuned for a page that renders
+    content — there's nothing here for a browser to be tricked into
+    executing in the first place."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(targets.router, prefix=settings.API_PREFIX)
 app.include_router(scans.router, prefix=settings.API_PREFIX)
