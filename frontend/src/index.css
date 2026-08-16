@@ -5,18 +5,20 @@
 @layer base {
   :root {
     /* Mirrors src/theme.ts — see that file for what each accent means. */
-    --teal: #0f766e;
-    --ember: #c2410c;
-    --ocean: #0369a1;
-    --moss: #15803d;
+    --teal: #08756f;
+    --teal-soft: #12a6a0;
+    --hat: #8d5428;
+    --hat-soft: #b98547;
+    --ocean: #0b6f8f;
+    --moss: #1f7a4d;
     --rose: #be123c;
-    --gold: #b45309;
+    --gold: #b7791f;
 
-    --page: #f4efe6;
+    --page: #eef8f5;
     --card: #fbf7ef;
-    --sunk: #f0e9dc;
-    --border: #e3d8c4;
-    --ink: #2b2318;
+    --sunk: #dff0ec;
+    --border: #b9d6cf;
+    --ink: #123331;
   }
 
   html,
@@ -69,6 +71,46 @@
     }
   }
 
+  /* Each dot in PerryFaceReveal pops in from nothing, slightly overshooting
+     before settling — the "materializing" look, staggered per-dot via an
+     inline animation-delay. */
+  @keyframes dot-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.35);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* PerryFaceReveal's crisp illustration layer: invisible while the dots
+     are still popping in, then fades on top of them once they finish
+     (its animation-delay is set inline, timed to the last dot). */
+  @keyframes face-resolve {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .face-resolve {
+    opacity: 0;
+    animation: face-resolve 0.4s ease both;
+  }
+
+  .dot-pop {
+    opacity: 0;
+    animation: dot-pop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
   .animate-rise {
     animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
@@ -94,12 +136,23 @@
     animation-delay: 0.24s;
   }
 
-  /* Soft colour wash used behind hero sections. */
-  .aurora {
+  .platypus-field {
     background-image:
-      radial-gradient(42rem 22rem at 12% -8%, rgba(20, 184, 166, 0.16), transparent 60%),
-      radial-gradient(38rem 20rem at 88% -6%, rgba(234, 124, 60, 0.16), transparent 60%),
-      radial-gradient(34rem 20rem at 50% 108%, rgba(3, 105, 161, 0.12), transparent 62%);
+      linear-gradient(120deg, rgba(18, 166, 160, 0.14), transparent 42%),
+      linear-gradient(300deg, rgba(185, 133, 71, 0.14), transparent 44%),
+      repeating-linear-gradient(
+        135deg,
+        rgba(8, 117, 111, 0.07) 0,
+        rgba(8, 117, 111, 0.07) 1px,
+        transparent 1px,
+        transparent 18px
+      );
+  }
+
+  .mascot-shadow {
+    box-shadow:
+      0 18px 40px -24px rgba(8, 117, 111, 0.9),
+      inset 0 0 0 1px rgba(8, 117, 111, 0.18);
   }
 
   .lift {

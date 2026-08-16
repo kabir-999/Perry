@@ -74,10 +74,10 @@ export default function NewScan() {
   return (
     <div className="mx-auto max-w-2xl pt-6 sm:pt-16">
       <div className="animate-rise mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight text-[#2b2318]">
+        <h1 className="text-3xl font-bold tracking-tight text-[#123331]">
           Scan a website for security risks
         </h1>
-        <p className="mx-auto mt-3 max-w-md text-sm text-[#6f6552]">
+        <p className="mx-auto mt-3 max-w-md text-sm text-[#4f716c]">
           Enter a URL and get an automated security assessment — no
           configuration needed. We handle the technical details.
         </p>
@@ -85,9 +85,9 @@ export default function NewScan() {
 
       <form
         onSubmit={handleSubmit}
-        className="animate-rise delay-1 rounded-2xl border border-[#e3d8c4] bg-[#fbf7ef] p-6 shadow-xl"
+        className="animate-rise delay-1 rounded-2xl border border-[#b9d6cf] bg-[#fbf7ef] p-6 shadow-xl"
       >
-        <label className="mb-1.5 block text-sm font-medium text-[#4a4032]">
+        <label className="mb-1.5 block text-sm font-medium text-[#254c48]">
           Website URL
         </label>
         <input
@@ -97,19 +97,19 @@ export default function NewScan() {
           value={targetUrl}
           onChange={(e) => setTargetUrl(e.target.value)}
           placeholder="https://example.com"
-          className="w-full rounded-lg border border-[#d6c9b0] bg-[#f4efe6] px-4 py-3 text-base text-[#2b2318] outline-none transition-colors focus:border-[#c2410c]"
+          className="w-full rounded-lg border border-[#8fbab1] bg-[#eef8f5] px-4 py-3 text-base text-[#123331] outline-none transition-colors focus:border-[#08756f]"
         />
 
-        <label className="mt-4 flex items-start gap-3 rounded-lg border border-[#e3d8c4] bg-[#f0e9dc] p-3.5 text-sm text-[#4a4032]">
+        <label className="mt-4 flex items-start gap-3 rounded-lg border border-[#b9d6cf] bg-[#dff0ec] p-3.5 text-sm text-[#254c48]">
           <input
             type="checkbox"
             checked={authorized}
             onChange={(e) => setAuthorized(e.target.checked)}
-            className="mt-0.5 accent-[#c2410c]"
+            className="mt-0.5 accent-[#08756f]"
           />
           <span>
             I own this site or have explicit authorization to test it.{" "}
-            <span className="text-[#6f6552]">
+            <span className="text-[#4f716c]">
               Required for active tests (XSS, SQL injection, traversal). Leave
               unchecked to run everything else read-only.
             </span>
@@ -125,7 +125,7 @@ export default function NewScan() {
         <button
           type="submit"
           disabled={submitting}
-          className="lift mt-5 w-full rounded-xl bg-[#c2410c] px-4 py-3 text-sm font-semibold text-white shadow-md transition-colors hover:bg-[#9a3412] disabled:cursor-not-allowed disabled:opacity-60"
+          className="lift mt-5 w-full rounded-xl bg-[#8d5428] px-4 py-3 text-sm font-semibold text-white shadow-md transition-colors hover:bg-[#6f3f1f] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {submitting
             ? "Starting scan…"
@@ -139,7 +139,7 @@ export default function NewScan() {
         {CAPABILITIES.map((c) => (
           <span
             key={c}
-            className="rounded-full border border-[#e3d8c4] bg-[#fbf7ef] px-3 py-1 text-xs text-[#6f6552]"
+            className="rounded-full border border-[#b9d6cf] bg-[#fbf7ef] px-3 py-1 text-xs text-[#4f716c]"
           >
             {c}
           </span>
@@ -147,7 +147,7 @@ export default function NewScan() {
       </div>
 
       <section className="mt-10">
-        <h2 className="text-center text-lg font-semibold text-[#2b2318]">
+        <h2 className="text-center text-lg font-semibold text-[#123331]">
           Why scan before you deploy
         </h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -156,7 +156,7 @@ export default function NewScan() {
             return (
               <div
                 key={b.title}
-                className="lift animate-rise rounded-xl border border-[#e3d8c4] bg-[#fbf7ef] p-4 hover:shadow-md"
+                className="lift animate-rise rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-4 hover:shadow-md"
                 style={{
                   animationDelay: `${i * 60}ms`,
                   borderLeft: `3px solid ${accent}`,
@@ -169,11 +169,11 @@ export default function NewScan() {
                   >
                     {String(i + 1).padStart(2, "0")}
                   </span>
-                  <h3 className="text-sm font-semibold text-[#3a3122]">
+                  <h3 className="text-sm font-semibold text-[#254c48]">
                     {b.title}
                   </h3>
                 </div>
-                <p className="mt-1.5 text-xs leading-relaxed text-[#6f6552]">
+                <p className="mt-1.5 text-xs leading-relaxed text-[#4f716c]">
                   {b.body}
                 </p>
               </div>

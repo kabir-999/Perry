@@ -1,9 +1,12 @@
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import MascotLogo from "./MascotLogo";
 
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isHome = location.pathname === "/";
 
   function handleLogout() {
     logout();
@@ -11,24 +14,12 @@ export default function Layout() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f4efe6] text-[#2b2318]">
-      <header className="sticky top-0 z-10 border-b border-[#e3d8c4] bg-[#f4efe6]/90 backdrop-blur">
+    <div className="platypus-field min-h-screen bg-[#eef8f5] text-[#123331]">
+      {!isHome && (
+        <header className="sticky top-0 z-10 border-b border-[#b9d6cf] bg-[#eef8f5]/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3.5">
           <Link to="/" className="flex items-center gap-2.5">
-            <span
-              className="grid h-8 w-8 place-items-center rounded-lg text-white"
-              style={{
-                background: "linear-gradient(135deg,#0f766e,#0369a1 55%,#c2410c)",
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              </svg>
-            </span>
-            <div className="leading-tight">
-              <p className="text-sm font-semibold tracking-tight">Sentinel</p>
-              <p className="text-[11px] text-[#948972]">Web Security Scanner</p>
-            </div>
+            <MascotLogo size="md" />
           </Link>
           <nav className="flex items-center gap-1">
             <NavLink
@@ -36,8 +27,8 @@ export default function Layout() {
               className={({ isActive }) =>
                 `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
                   isActive
-                    ? "text-[#c2410c]"
-                    : "text-[#6f6552] hover:text-[#3a3122]"
+                    ? "text-[#08756f]"
+                    : "text-[#4f716c] hover:text-[#123331]"
                 }`
               }
             >
@@ -45,22 +36,22 @@ export default function Layout() {
             </NavLink>
             <Link
               to="/scans/new"
-              className="lift rounded-lg bg-[#c2410c] px-3.5 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#9a3412]"
+              className="lift rounded-lg bg-[#8d5428] px-3.5 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#6f3f1f]"
             >
               New Scan
             </Link>
 
             {user && (
-              <div className="ml-2 flex items-center gap-2 border-l border-[#e3d8c4] pl-3">
+              <div className="ml-2 flex items-center gap-2 border-l border-[#b9d6cf] pl-3">
                 <span
-                  className="hidden text-xs text-[#6f6552] sm:block"
+                  className="hidden text-xs text-[#4f716c] sm:block"
                   title={user.email}
                 >
                   {user.display_name || user.email}
                 </span>
                 <button
                   onClick={handleLogout}
-                  className="rounded-lg px-2.5 py-1.5 text-sm font-medium text-[#6f6552] transition-colors hover:text-[#3a3122]"
+                  className="rounded-lg px-2.5 py-1.5 text-sm font-medium text-[#4f716c] transition-colors hover:text-[#123331]"
                 >
                   Sign out
                 </button>
@@ -68,8 +59,9 @@ export default function Layout() {
             )}
           </nav>
         </div>
-      </header>
-      <main className="mx-auto max-w-5xl px-6 py-8">
+        </header>
+      )}
+      <main className={isHome ? "p-6" : "mx-auto max-w-5xl px-6 py-8"}>
         <Outlet />
       </main>
     </div>

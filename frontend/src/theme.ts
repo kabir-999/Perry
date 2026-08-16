@@ -1,48 +1,46 @@
 /**
  * Shared colour palette.
  *
- * Five accents carry meaning rather than decoration: TEAL is the consumer
- * side (link safety), EMBER the developer side (scanning), and OCEAN / MOSS /
- * ROSE / GOLD signal information, safety, danger, and caution wherever a
- * result is shown. Keep inline styles and chart colours pointing here so the
- * whole app moves together.
+ * The palette leans into the app mascot: teal skin, brown hat, and warm
+ * report-paper surfaces. Accents still carry semantic meaning in findings,
+ * charts, and badges.
  */
 export const PALETTE = {
-  teal: "#0f766e",
-  tealSoft: "#14b8a6",
-  ember: "#c2410c",
-  emberSoft: "#ea7c3c",
-  ocean: "#0369a1",
-  oceanSoft: "#0ea5e9",
-  moss: "#15803d",
-  mossSoft: "#22c55e",
+  teal: "#08756f",
+  tealSoft: "#12a6a0",
+  ember: "#8d5428",
+  emberSoft: "#b98547",
+  ocean: "#0b6f8f",
+  oceanSoft: "#26a6c5",
+  moss: "#1f7a4d",
+  mossSoft: "#35b86f",
   rose: "#be123c",
-  roseSoft: "#f43f5e",
-  gold: "#b45309",
-  goldSoft: "#f59e0b",
+  roseSoft: "#fb7185",
+  gold: "#b7791f",
+  goldSoft: "#efb25b",
 } as const;
 
 /** Ink and surface tones — the warm paper base the app sits on. */
 export const SURFACE = {
-  page: "#f4efe6",
+  page: "#eef8f5",
   card: "#fbf7ef",
-  sunk: "#f0e9dc",
-  border: "#e3d8c4",
-  borderStrong: "#d6c9b0",
-  ink: "#2b2318",
-  inkSoft: "#4a4032",
-  muted: "#6f6552",
-  faint: "#948972",
+  sunk: "#dff0ec",
+  border: "#b9d6cf",
+  borderStrong: "#8fbab1",
+  ink: "#123331",
+  inkSoft: "#254c48",
+  muted: "#4f716c",
+  faint: "#66837d",
 } as const;
 
 /** Severity → colour, used by findings, charts, and badges alike. */
 export const SEVERITY_COLOR: Record<string, string> = {
   critical: PALETTE.rose,
-  high: PALETTE.ember,
+  high: "#b45309",
   medium: PALETTE.gold,
   low: PALETTE.ocean,
   minimal: PALETTE.moss,
-  info: "#78716c",
+  info: "#66837d",
 };
 
 /** Ordered accents for lists where each item should read distinctly. */

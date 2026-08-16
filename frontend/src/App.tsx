@@ -1,17 +1,27 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import Layout from "./components/Layout";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import Home from "./pages/Home";
 import Login from "./pages/Login";
 import NewScan from "./pages/NewScan";
 import ProjectDetail from "./pages/ProjectDetail";
 import Projects from "./pages/Projects";
 import ScanDetail from "./pages/ScanDetail";
 import type { UserRole } from "./types";
+import MascotLogo from "./components/MascotLogo";
+
+function safeNext(raw: string | null) {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/projects";
+  return raw;
+}
 
 function Splash() {
   return (
-    <div className="grid min-h-screen place-items-center bg-[#f4efe6]">
-      <p className="text-sm text-[#6f6552]">Loading…</p>
+    <div className="platypus-field grid min-h-screen place-items-center bg-[#eef8f5]">
+      <div className="animate-rise flex flex-col items-center gap-3">
+        <MascotLogo size="lg" />
+        <p className="text-sm font-medium text-[#4f716c]">Loading...</p>
+      </div>
     </div>
   );
 }
@@ -24,21 +34,29 @@ function Guard({
   children: React.ReactNode;
 }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) return <Splash />;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
+  }
   return <>{children}</>;
 }
 
 function LoginRoute() {
   const { user, loading } = useAuth();
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const next = safeNext(params.get("next"));
   if (loading) return <Splash />;
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to={next} replace />;
   return <Login />;
 }
 
 function Routing() {
   return (
     <Routes>
+      <Route index element={<Home />} />
       <Route path="/login" element={<LoginRoute />} />
 
       <Route
@@ -48,7 +66,6 @@ function Routing() {
           </Guard>
         }
       >
-        <Route index element={<Navigate to="/projects" replace />} />
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:targetId" element={<ProjectDetail />} />
         <Route path="scans/new" element={<NewScan />} />

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import MascotLogo from "../components/MascotLogo";
 import { useAuth } from "../contexts/AuthContext";
 import type { UserRole } from "../types";
 
@@ -29,16 +30,23 @@ const SIDES: Side[] = [
       "Honest per-attack coverage: discovered vs. actually tested",
       "Deterministic risk scoring and a downloadable report",
     ],
-    accent: "#c2410c",
-    accentHover: "#9a3412",
-    tint: "rgba(234,124,60,0.10)",
-    ring: "rgba(234,124,60,0.45)",
+    accent: "#08756f",
+    accentHover: "#075f5a",
+    tint: "rgba(18,166,160,0.12)",
+    ring: "rgba(8,117,111,0.35)",
   },
 ];
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, signup } = useAuth();
+  const params = new URLSearchParams(location.search);
+  const rawNext = params.get("next");
+  const next =
+    rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//")
+      ? rawNext
+      : "/projects";
 
   // Single audience: developers scanning sites they own.
   const side = SIDES[0];
@@ -64,7 +72,7 @@ export default function Login() {
           role: "developer",
         });
       }
-      navigate("/", { replace: true });
+      navigate(next, { replace: true });
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setError(
@@ -80,34 +88,12 @@ export default function Login() {
   }
 
   return (
-    <div className="aurora min-h-screen bg-[#f4efe6]">
+    <div className="platypus-field min-h-screen bg-[#eef8f5]">
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-8">
         <header className="flex items-center gap-2.5">
-          <span
-            className="grid h-9 w-9 place-items-center rounded-xl text-white"
-            style={{
-              background: "linear-gradient(135deg,#0f766e,#0369a1 55%,#c2410c)",
-            }}
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-          </span>
-          <div className="leading-tight">
-            <p className="text-sm font-semibold tracking-tight text-[#2b2318]">
-              Sentinel
-            </p>
-            <p className="text-[11px] text-[#948972]">Web Security Toolkit</p>
-          </div>
+          <Link to="/" aria-label="Go to home">
+            <MascotLogo size="md" />
+          </Link>
         </header>
 
         <Hero />
@@ -137,14 +123,11 @@ export default function Login() {
 
 function Hero() {
   return (
-    <div className="animate-rise pt-10 text-center">
-      <h1 className="text-4xl font-bold tracking-tight text-[#2b2318] sm:text-5xl">
-        Know what you're
-        <span className="bg-gradient-to-r from-[#0f766e] via-[#0369a1] to-[#c2410c] bg-clip-text text-transparent">
-          {" "}shipping.
-        </span>
-      </h1>
-      <p className="mx-auto mt-4 max-w-xl text-[15px] leading-relaxed text-[#6f6552]">
+    <div className="animate-rise pt-8 text-center sm:pt-10">
+      <div className="flex justify-center">
+        <MascotLogo size="lg" />
+      </div>
+      <p className="mx-auto mt-5 max-w-xl text-[15px] leading-relaxed text-[#4f716c]">
         Scan a site you own end to end — attack surface, live vulnerabilities,
         and the source behind them — before it ships.
       </p>
@@ -157,7 +140,7 @@ function Hero() {
         ].map((c, i) => (
           <span
             key={c}
-            className="animate-rise rounded-full border border-[#e3d8c4] bg-[#fbf7ef] px-3 py-1 text-xs text-[#6f6552]"
+            className="animate-rise rounded-full border border-[#b9d6cf] bg-[#fbf7ef] px-3 py-1 text-xs text-[#4f716c]"
             style={{ animationDelay: `${i * 60}ms` }}
           >
             {c}
@@ -200,7 +183,7 @@ function AuthPanel({
   onSubmit,
 }: PanelProps) {
   const field =
-    "w-full rounded-xl border border-[#d6c9b0] bg-[#f4efe6] px-4 py-3 text-sm text-[#2b2318] outline-none transition-colors";
+    "w-full rounded-xl border border-[#8fbab1] bg-[#eef8f5] px-4 py-3 text-sm text-[#123331] outline-none transition-colors";
 
   return (
     <div className="flex flex-1 items-start justify-center py-10">
@@ -219,13 +202,13 @@ function AuthPanel({
             >
               {side.eyebrow}
             </p>
-            <h2 className="mt-1 text-xl font-bold tracking-tight text-[#2b2318]">
+            <h2 className="mt-1 text-xl font-bold tracking-tight text-[#123331]">
               {side.lead}{" "}
               <span className="italic" style={{ color: side.accent }}>
                 {side.emphasis}
               </span>
             </h2>
-            <p className="mt-1 text-xs text-[#6f6552]">
+            <p className="mt-1 text-xs text-[#4f716c]">
               {mode === "login"
                 ? "Welcome back — sign in to continue."
                 : side.id === "developer"
@@ -235,7 +218,7 @@ function AuthPanel({
           </div>
 
           <form onSubmit={onSubmit} className="px-7 py-6">
-            <div className="mb-5 flex rounded-xl border border-[#e3d8c4] bg-[#f0e9dc] p-1">
+            <div className="mb-5 flex rounded-xl border border-[#b9d6cf] bg-[#dff0ec] p-1">
               {(["login", "signup"] as const).map((m) => {
                 const active = mode === m;
                 return (
@@ -249,9 +232,9 @@ function AuthPanel({
                         ? {
                             background: "#fbf7ef",
                             color: side.accent,
-                            boxShadow: "0 1px 3px rgba(43,35,24,0.10)",
+                            boxShadow: "0 1px 3px rgba(18,51,49,0.10)",
                           }
-                        : { color: "#6f6552" }
+                        : { color: "#4f716c" }
                     }
                   >
                     {m === "login" ? "Sign in" : "Create account"}
@@ -262,9 +245,9 @@ function AuthPanel({
 
             {mode === "signup" && (
               <div className="animate-fade mb-4">
-                <label className="mb-1.5 block text-sm font-medium text-[#4a4032]">
+                <label className="mb-1.5 block text-sm font-medium text-[#254c48]">
                   Name{" "}
-                  <span className="font-normal text-[#6f6552]">(optional)</span>
+                  <span className="font-normal text-[#4f716c]">(optional)</span>
                 </label>
                 <input
                   type="text"
@@ -273,12 +256,12 @@ function AuthPanel({
                   placeholder="Ada"
                   className={field}
                   onFocus={(e) => (e.currentTarget.style.borderColor = side.accent)}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#d6c9b0")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#8fbab1")}
                 />
               </div>
             )}
 
-            <label className="mb-1.5 block text-sm font-medium text-[#4a4032]">
+            <label className="mb-1.5 block text-sm font-medium text-[#254c48]">
               Email
             </label>
             <input
@@ -290,10 +273,10 @@ function AuthPanel({
               placeholder="you@example.com"
               className={`${field} mb-4`}
               onFocus={(e) => (e.currentTarget.style.borderColor = side.accent)}
-              onBlur={(e) => (e.currentTarget.style.borderColor = "#d6c9b0")}
+              onBlur={(e) => (e.currentTarget.style.borderColor = "#8fbab1")}
             />
 
-            <label className="mb-1.5 block text-sm font-medium text-[#4a4032]">
+            <label className="mb-1.5 block text-sm font-medium text-[#254c48]">
               Password
             </label>
             <input
@@ -302,13 +285,13 @@ function AuthPanel({
               autoComplete={mode === "login" ? "current-password" : "new-password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === "signup" ? "At least 8 characters" : "••••••••"}
+              placeholder={mode === "signup" ? "At least 8 characters" : "Password"}
               className={field}
               onFocus={(e) => (e.currentTarget.style.borderColor = side.accent)}
-              onBlur={(e) => (e.currentTarget.style.borderColor = "#d6c9b0")}
+              onBlur={(e) => (e.currentTarget.style.borderColor = "#8fbab1")}
             />
             {mode === "signup" && (
-              <p className="mt-1.5 text-xs text-[#6f6552]">
+              <p className="mt-1.5 text-xs text-[#4f716c]">
                 Mix letters with numbers or symbols.
               </p>
             )}
@@ -335,7 +318,7 @@ function AuthPanel({
                   : "Create account"}
             </button>
 
-            <p className="mt-4 text-center text-[13px] text-[#6f6552]">
+            <p className="mt-4 text-center text-[13px] text-[#4f716c]">
               {mode === "login" ? "Don't have an account? " : "Already have one? "}
               <button
                 type="button"

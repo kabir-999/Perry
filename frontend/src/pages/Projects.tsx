@@ -8,7 +8,7 @@ export default function Projects() {
   const { projects, loading, error } = useProjects();
 
   if (loading) {
-    return <p className="text-[#6f6552]">Loading projects…</p>;
+    return <p className="text-[#4f716c]">Loading projects...</p>;
   }
 
   if (error) {
@@ -23,24 +23,24 @@ export default function Projects() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold">Projects</h2>
-          <p className="mt-1 text-sm text-[#6f6552]">
+          <h2 className="text-xl font-semibold text-[#123331]">Projects</h2>
+          <p className="mt-1 text-sm text-[#4f716c]">
             Every website you've scanned. Scanning the same URL again adds to
             its history here instead of creating a new project.
           </p>
         </div>
         <Link
           to="/scans/new"
-          className="lift rounded-xl bg-[#c2410c] px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-[#9a3412]"
+          className="lift rounded-xl bg-[#8d5428] px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-[#6f3f1f]"
         >
           Scan a Website
         </Link>
       </div>
 
       {!projects || projects.length === 0 ? (
-        <div className="rounded-lg border border-[#e3d8c4] bg-[#fbf7ef] p-6 text-center text-sm text-[#948972]">
+        <div className="rounded-lg border border-[#b9d6cf] bg-[#fbf7ef] p-6 text-center text-sm text-[#66837d]">
           No projects yet.{" "}
-          <Link to="/scans/new" className="text-[#c2410c] hover:underline">
+          <Link to="/scans/new" className="text-[#08756f] hover:underline">
             Scan a website
           </Link>{" "}
           to create your first one.
@@ -56,10 +56,10 @@ export default function Projects() {
               <Link
                 key={project.target_id}
                 to={`/projects/${project.target_id}`}
-                className="lift rounded-xl border border-[#e3d8c4] bg-[#fbf7ef] p-5 hover:shadow-md"
+                className="lift rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-5 hover:border-[#8fbab1] hover:shadow-md"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <h3 className="truncate text-sm font-semibold text-[#2b2318]">
+                  <h3 className="truncate text-sm font-semibold text-[#123331]">
                     {project.label}
                   </h3>
                   {terminal && (
@@ -71,11 +71,11 @@ export default function Projects() {
                     </span>
                   )}
                 </div>
-                <p className="mt-2 text-xs text-[#948972]">
+                <p className="mt-2 text-xs text-[#66837d]">
                   {project.scan_count} scan{project.scan_count === 1 ? "" : "s"} · last{" "}
                   {new Date(project.latest_scan_at).toLocaleDateString()}
                 </p>
-                <p className="mt-1 text-xs capitalize text-[#6f6552]">
+                <p className="mt-1 text-xs capitalize text-[#4f716c]">
                   Latest: {project.latest_status}
                 </p>
               </Link>
