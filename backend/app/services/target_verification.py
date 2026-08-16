@@ -2,12 +2,12 @@
 Deployment ownership verification.
 
 Active testing sends crafted payloads at a live host. Doing that to a target
-the requester does not administer is unauthorized testing, so Sentinel proves
+the requester does not administer is unauthorized testing, so Perry proves
 technical control first, by one of three standard challenges:
 
-  DNS   a TXT record at ``_sentinel.<host>`` containing the token
-  HTTP  a file at ``/.well-known/sentinel-verification.txt`` containing it
-  META  a ``<meta name="sentinel-verification">`` tag on the homepage
+  DNS   a TXT record at ``_Perry.<host>`` containing the token
+  HTTP  a file at ``/.well-known/Perry-verification.txt`` containing it
+  META  a ``<meta name="Perry-verification">`` tag on the homepage
 
 Each requires write access to something only an administrator controls. Which
 one is easiest depends on the host: a ``*.vercel.app`` subdomain has no DNS the
@@ -31,10 +31,10 @@ import httpx
 # Verification is re-checked periodically: control of a host can change hands.
 VERIFICATION_TTL_DAYS = 90
 
-DNS_PREFIX = "_sentinel"
-META_NAME = "sentinel-verification"
-HTTP_PATH = "/.well-known/sentinel-verification.txt"
-TOKEN_FIELD = "sentinel-verification"
+DNS_PREFIX = "_Perry"
+META_NAME = "Perry-verification"
+HTTP_PATH = "/.well-known/Perry-verification.txt"
+TOKEN_FIELD = "Perry-verification"
 
 UNVERIFIED = "UNVERIFIED"
 VERIFICATION_PENDING = "VERIFICATION_PENDING"
@@ -49,7 +49,7 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 def generate_token() -> str:
     """A per-target nonce. Not a credential, but never logged."""
-    return f"sentinel-{secrets.token_urlsafe(24)}"
+    return f"Perry-{secrets.token_urlsafe(24)}"
 
 
 def is_local_target(hostname: str) -> bool:
@@ -112,7 +112,7 @@ def http_instructions(hostname: str, token: str) -> dict:
 
 
 async def verify_dns(hostname: str, token: str) -> VerificationResult:
-    """Look for the token in a TXT record at _sentinel.<host>."""
+    """Look for the token in a TXT record at _Perry.<host>."""
     resolver = dns.asyncresolver.Resolver()
     resolver.lifetime = 8.0
     resolver.timeout = 8.0
@@ -137,7 +137,7 @@ async def verify_dns(hostname: str, token: str) -> VerificationResult:
 
 
 async def verify_http(hostname: str, token: str) -> VerificationResult:
-    """Look for the token in /.well-known/sentinel-verification.txt."""
+    """Look for the token in /.well-known/Perry-verification.txt."""
     last = "Verification file could not be retrieved."
     for scheme in ("https", "http"):
         url = f"{scheme}://{hostname}{HTTP_PATH}"
@@ -217,7 +217,7 @@ def is_active_testing_allowed(target) -> tuple[bool, str]:
     """Whether active testing may run against this target, and why not."""
     if target is None:
         return False, (
-            "Target verification required. Sentinel scans applications that you "
+            "Target verification required. Perry scans applications that you "
             "own or are authorized to test. Verify this deployment before "
             "starting an active security scan."
         )

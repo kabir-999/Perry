@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 _SCAN_DROP = [
     "repo_info_json", "repo_url", "custom_test_cases_json",
     "ai_analyzed", "ai_error", "ai_summary", "ai_recommendation",
-    "risk_factors_json", "test_results_json", "sentinel_risk_json",
+    "risk_factors_json", "test_results_json", "Perry_risk_json",
 ]
 _FINDING_DROP = [
     "llm_verdict", "llm_confidence", "llm_explanation", "llm_false_positive_reason",

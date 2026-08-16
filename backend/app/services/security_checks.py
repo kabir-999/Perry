@@ -757,11 +757,11 @@ async def check_api_security(
 # that would do anything if actually executed. `disallowed_type` probes
 # whether a non-text extension is accepted at all; `traversal_filename`
 # probes whether a path-traversal-shaped filename is accepted verbatim.
-_UPLOAD_CANARY_CONTENT = b"sentinel-upload-canary"
+_UPLOAD_CANARY_CONTENT = b"Perry-upload-canary"
 _UPLOAD_CANARIES = (
-    ("benign", "sentinel_canary.txt", "text/plain"),
-    ("disallowed_type", "sentinel_canary.php", "application/x-php"),
-    ("traversal_filename", "../../tmp/sentinel_traversal_canary.txt", "text/plain"),
+    ("benign", "Perry_canary.txt", "text/plain"),
+    ("disallowed_type", "Perry_canary.php", "application/x-php"),
+    ("traversal_filename", "../../tmp/Perry_traversal_canary.txt", "text/plain"),
 )
 
 
@@ -811,7 +811,7 @@ async def check_upload_endpoint(fetcher: Fetcher, upload) -> list[FindingCandida
             evidence="Accepted canary uploads: "
             + ", ".join(f"{kind} (HTTP {r.status_code})" for kind, r in accepted.items()),
             request_summary=f"{upload.method} {upload.url} (multipart canary upload)",
-            description="Sentinel uploaded harmless canary files with a "
+            description="Perry uploaded harmless canary files with a "
             "disallowed extension and/or a path-traversal-shaped filename "
             "to verify server-side upload validation.",
             impact=(
@@ -828,7 +828,7 @@ async def check_upload_endpoint(fetcher: Fetcher, upload) -> list[FindingCandida
         )
     )
 
-    # Only escalate to a verified finding if Sentinel can actually retrieve
+    # Only escalate to a verified finding if Perry can actually retrieve
     # the canary it just uploaded — never guess a storage URL.
     location = accepted.get("disallowed_type") or accepted.get("benign")
     loc_header = location.header("location") if location else ""
@@ -849,7 +849,7 @@ async def check_upload_endpoint(fetcher: Fetcher, upload) -> list[FindingCandida
                 evidence="Canary content matched at the location the server returned.",
                 request_summary=f"GET {check_url}",
                 response_summary=f"HTTP {fetch_res.status_code}; canary content present.",
-                description="A canary file uploaded by Sentinel was retrievable "
+                description="A canary file uploaded by Perry was retrievable "
                 "at the location the server returned, confirming uploaded "
                 "content is served back without further gating.",
                 impact="An attacker-controlled file may be servable directly; "

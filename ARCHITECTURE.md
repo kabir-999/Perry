@@ -1,6 +1,6 @@
 # Architecture
 
-**Sentinel** — a web application security scanner with two independent entry
+**Perry** — a web application security scanner with two independent entry
 points that do not share a risk model:
 
 1. **Web pipeline** — a user registers a target, verifies ownership, and
@@ -166,7 +166,7 @@ app/
 │   │                     authentication) is capped until demonstrated by
 │   │                     an observed request/response pair
 │   ├── risk_engine.py    deterministic scoring helpers (ordering only)
-│   ├── risk_model/       Sentinel Risk Model v1 (see below)
+│   ├── risk_model/       Perry Risk Model v1 (see below)
 │   ├── security_graph.py      attack-surface graph used by risk aggregation
 │   ├── scan_summary.py   aggregates everything into ONE structured payload
 │   ├── llm_security_analyst.py  Groq: one call, strict prompt, 1 retry,
@@ -241,7 +241,7 @@ confirmed findings is 0.
 ## Coverage & Assessment (`app/services/coverage.py`, `app/services/assessment.py`)
 
 A risk score is only as trustworthy as how much of the target was actually
-examined. Sentinel reports three separate numbers so low coverage never
+examined. Perry reports three separate numbers so low coverage never
 masquerades as low risk:
 
 - **`overall_risk`** (0-100) — how bad the worst *confirmed* evidence is.
@@ -327,9 +327,9 @@ Before **active testing** (crafted/attacking payloads) may run against a
 (`app/services/target_verification.py`), issued by `POST /api/targets` and
 checked by `POST /api/targets/{id}/verify`:
 
-- **DNS** — a TXT record at `_sentinel.<hostname>` containing the issued token.
-- **HTTP file** — `/.well-known/sentinel-verification.txt` on the host.
-- **Meta tag** — `<meta name="sentinel-verification" content="...">` in `<head>`.
+- **DNS** — a TXT record at `_Perry.<hostname>` containing the issued token.
+- **HTTP file** — `/.well-known/Perry-verification.txt` on the host.
+- **Meta tag** — `<meta name="Perry-verification" content="...">` in `<head>`.
 
 Verification is TTL-limited (90 days) and tracked as
 `UNVERIFIED → VERIFICATION_PENDING → VERIFIED` (or `VERIFICATION_FAILED` /
@@ -363,7 +363,7 @@ Severity/Risk → Reporting → Remediation verification → CI/CD gate
 - **File upload testing** (`security_checks.check_upload_endpoint`) — safe
   canary-file uploads (never executable content) distinguish *detected* →
   *tested* → *weak validation* (disallowed extension/traversal-shaped
-  filename accepted) → *verified* (Sentinel fetches back its own canary and
+  filename accepted) → *verified* (Perry fetches back its own canary and
   confirms it's served). A bare detected endpoint never escalates on its own.
 - **Traversal on discovered resources** (`check_path_traversal_on_path`,
   dispatched from `directory_scanner.py` for file-shaped hits) — reuses the

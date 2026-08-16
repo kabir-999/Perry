@@ -290,12 +290,12 @@ export default function ScanDetail() {
   return (
     <div className="mx-auto max-w-4xl space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold tracking-tight">Security Assessment</h2>
-          <p className="font-mono text-sm text-[#6f6552]">{target}</p>
+          <p className="break-all font-mono text-sm text-[#6f6552]">{target}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {!isTerminal && (
             <button
               onClick={handleCancel}

@@ -1,4 +1,4 @@
-name: Sentinel Security Scan
+name: Perry Security Scan
 
 on:
   push:
@@ -15,13 +15,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Sentinel
+      - name: Install Perry
         run: pip install -r backend/requirements.txt
 
-      # The repository invokes Sentinel against its own checkout, which is
+      # The repository invokes Perry against its own checkout, which is
       # what establishes the authorization context — no target verification
       # is involved because no external host is touched.
-      - name: Run Sentinel
+      - name: Run Perry
         working-directory: backend
         env:
           PYTHONPATH: .
@@ -29,11 +29,11 @@ jobs:
           python -m app.cli scan "$GITHUB_WORKSPACE" \
             --fail-on high \
             --max-risk 70 \
-            --json "$GITHUB_WORKSPACE/sentinel-report.json"
+            --json "$GITHUB_WORKSPACE/Perry-report.json"
 
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sentinel-report
-          path: sentinel-report.json
+          name: Perry-report
+          path: Perry-report.json

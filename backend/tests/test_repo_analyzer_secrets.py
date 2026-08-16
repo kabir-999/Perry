@@ -21,7 +21,7 @@ def git_repo(tmp_path: Path) -> Path:
     # A committed config file with a real-looking secret — genuinely exposed
     # to anyone who clones the repo. Built from parts at runtime rather than
     # as one literal, so this test's own source doesn't itself contain a
-    # matchable "KEY = "secret"" line that Sentinel would flag when this
+    # matchable "KEY = "secret"" line that Perry would flag when this
     # repo scans itself.
     fake_key_name = "API" + "_KEY"
     fake_token = "sk_live_" + "abcdef0123456789abcdef01"

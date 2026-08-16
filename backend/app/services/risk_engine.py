@@ -8,7 +8,7 @@ Each factor is normalised to 0-1 before weighting, so the weights (which sum
 to 1.0) translate directly into a 0-100 score:
 
   - TypeSeverity  — the finding's own severity band (critical..info).
-  - Confidence    — how sure Sentinel is this is real (confirmed..false_positive),
+  - Confidence    — how sure Perry is this is real (confirmed..false_positive),
                     reusing the same confidence vocabulary as the rest of the
                     pipeline (severity_policy.py, risk_model/__init__.py).
   - Exposure      — how many URLs/locations this same issue affects, reusing
@@ -30,7 +30,7 @@ to 1.0) translate directly into a 0-100 score:
 
 This score is per-finding, used for report display and sort-ordering — it
 is independent of (and does not feed) the authoritative aggregate score in
-risk_model.calculate_sentinel_risk, which scores real CVSS vectors and a
+risk_model.calculate_Perry_risk, which scores real CVSS vectors and a
 documented hardening scale rather than a general-purpose weighted formula;
 mixing the two would blur "this finding's estimated risk" with "this scan's
 CVSS-backed score." Runs before and independently of the LLM — the LLM

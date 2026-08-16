@@ -64,7 +64,7 @@ def _warning(confidence: str, coverage_pct: int) -> str:
         return ""
     if confidence == INSUFFICIENT:
         return (
-            f"Assessment coverage was only {coverage_pct}% — Sentinel could "
+            f"Assessment coverage was only {coverage_pct}% — Perry could "
             "not reach enough of the application's attack surface to draw a "
             "reliable conclusion. Treat the risk score as provisional; "
             "increase crawl depth/budget or supply authentication and re-scan."

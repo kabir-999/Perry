@@ -1,12 +1,12 @@
 """
-Sentinel CLI — repository scanning for local development and CI.
+Perry CLI — repository scanning for local development and CI.
 
-    sentinel scan .
-    sentinel scan . --fail-on high --json sentinel-report.json
+    Perry scan .
+    Perry scan . --fail-on high --json Perry-report.json
 
-Runs the same Sentinel Core the web dashboard uses: the AST-based SAST engine,
+Runs the same Perry Core the web dashboard uses: the AST-based SAST engine,
 secret detection, and dependency analysis with strict version-range validation
-and reachability. Scoring is the same deterministic Sentinel Risk Model, so a
+and reachability. Scoring is the same deterministic Perry Risk Model, so a
 CI run and a dashboard scan of the same code produce the same number.
 
 No network target is involved, so no ownership verification applies — the
@@ -98,7 +98,7 @@ _HYGIENE_NOTE = (
 
 
 def _to_finding(sf, category: str) -> FindingCandidate:
-    """Express a source finding in the standard Sentinel finding structure."""
+    """Express a source finding in the standard Perry finding structure."""
     hygiene = getattr(sf, "local_only", False)
     # A hygiene-only secret must not be matched by the risk model's
     # vuln-class lookup (which keys off this prefix and would otherwise
@@ -237,7 +237,7 @@ def _render(result: dict, severity_gate: dict, sev_reason: str | None,
 
     lines = [
         "",
-        "Sentinel Security Gate",
+        "Perry Security Gate",
         "",
         "Findings",
         "────────",
@@ -576,7 +576,7 @@ def _render_custom_test_report(result: dict, gate: dict, reason: str | None, pas
     counts = result["counts"]
     lines = [
         "",
-        "Sentinel Custom Test Report",
+        "Perry Custom Test Report",
         "",
         f"Target: {result['target']}",
         f"Tests run: {result['tests_run']}",
@@ -625,7 +625,7 @@ def _run_custom_test_command(args) -> int:
         try:
             preset_raw, strict_raw = _load_custom_tests_from_file(Path(args.tests))
         except OSError as exc:
-            print(f"sentinel: could not read {args.tests}: {exc}", file=sys.stderr)
+            print(f"Perry: could not read {args.tests}: {exc}", file=sys.stderr)
             return EXIT_ERROR
     elif _isatty():
         if not _prompt_yes_no(
@@ -637,7 +637,7 @@ def _run_custom_test_command(args) -> int:
         preset_raw, strict_raw, raw_lines_for_save = _collect_custom_tests_interactively()
     else:
         print(
-            "sentinel: custom-test requires --tests <file> or --test <\"key=value,...\"> "
+            "Perry: custom-test requires --tests <file> or --test <\"key=value,...\"> "
             "when running non-interactively (CI/CD). Run with no arguments interactively "
             "to see the shorthand syntax.",
             file=sys.stderr,
@@ -648,7 +648,7 @@ def _run_custom_test_command(args) -> int:
     cases, strict_errors = _validate_custom_tests(strict_raw)
     errors = preset_errors + strict_errors
     if errors:
-        print("sentinel: invalid custom test case(s):", file=sys.stderr)
+        print("Perry: invalid custom test case(s):", file=sys.stderr)
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
         return EXIT_ERROR
@@ -680,7 +680,7 @@ def _run_custom_test_command(args) -> int:
                 return EXIT_ERROR
         else:
             print(
-                "sentinel: custom-test requires --authorized to send live requests "
+                "Perry: custom-test requires --authorized to send live requests "
                 "in a non-interactive environment.",
                 file=sys.stderr,
             )
@@ -690,7 +690,7 @@ def _run_custom_test_command(args) -> int:
     try:
         result = asyncio.run(run_all_custom_tests(args.url, cases, preset_specs))
     except Exception as exc:
-        print(f"sentinel: custom-test failed: {exc}", file=sys.stderr)
+        print(f"Perry: custom-test failed: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
     gate, reason = _severity_gate(result["counts"], args.fail_on)
@@ -703,13 +703,13 @@ def _run_custom_test_command(args) -> int:
     if not args.quiet:
         print(_render_custom_test_report(result, gate, reason, passed))
     else:
-        print(f"Sentinel custom-test: {'PASSED' if passed else 'FAILED'}")
+        print(f"Perry custom-test: {'PASSED' if passed else 'FAILED'}")
 
     return EXIT_OK if passed else EXIT_GATE_FAILED
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sentinel", description=__doc__)
+    parser = argparse.ArgumentParser(prog="Perry", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Scan a repository or directory")
@@ -762,7 +762,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.path).resolve()
     if not root.is_dir():
-        print(f"sentinel: {root} is not a directory", file=sys.stderr)
+        print(f"Perry: {root} is not a directory", file=sys.stderr)
         return EXIT_ERROR
 
     try:
@@ -790,7 +790,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(_render(result, severity_gate, sev_reason, risk_gate, risk_reason, overall_passed))
     else:
-        print(f"Sentinel: {score}/100 {'PASSED' if overall_passed else 'FAILED'}")
+        print(f"Perry: {score}/100 {'PASSED' if overall_passed else 'FAILED'}")
 
     return result["exit_code"]
 

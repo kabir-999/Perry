@@ -2,7 +2,7 @@
 Behavior-based classification of a captured network request.
 
 Deliberately never keys off a "/api/" (or similar) substring in the URL —
-that's exactly the false signal that made Sentinel report "APIs: 0" against
+that's exactly the false signal that made Perry report "APIs: 0" against
 Juice Shop, whose real API lives at /rest/... and /api/... and dozens of
 other shapes no wordlist would guess. Instead this uses what the browser
 itself already knows about the request: Playwright's own `resource_type`

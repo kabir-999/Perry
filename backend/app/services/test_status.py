@@ -4,7 +4,7 @@ Test-status vocabulary for the security-test matrix.
 Replaces the old ad hoc `"pass"/"finding"/"not_applicable"/"not_authorized"/
 "inconclusive"` strings with a status that separates "we looked and it's
 fine" from "we never actually looked" — the distinction the old vocabulary
-collapsed, which is exactly why Sentinel could report `API Security: PASS`
+collapsed, which is exactly why Perry could report `API Security: PASS`
 against a target where zero API endpoints were ever discovered.
 """
 from __future__ import annotations

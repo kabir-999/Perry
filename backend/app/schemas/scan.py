@@ -41,7 +41,7 @@ class ScanCreate(BaseModel):
         return (self.authorization_statement or "").strip() == REQUIRED_AUTHORIZATION_PHRASE
 
     # Authenticated scanning (opt-in). Only meaningful when the target has a
-    # verified VerifiedTarget.auth_header already on file — Sentinel never
+    # verified VerifiedTarget.auth_header already on file — Perry never
     # self-registers or generates a credential; a human must have created the
     # scanner's test account in the authorized environment and supplied its
     # session via the target verification flow. When true, crawling and

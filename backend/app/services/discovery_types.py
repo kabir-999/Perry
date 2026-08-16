@@ -70,7 +70,7 @@ class CrawlResult:
 @dataclass
 class DiscoveredNetworkRequest:
     """One request captured directly off the browser's network layer during
-    a browser_crawler.py run — this is *behavioral* discovery: Sentinel saw
+    a browser_crawler.py run — this is *behavioral* discovery: Perry saw
     the browser actually make this call, regardless of whether it came from
     fetch(), XMLHttpRequest, axios, Angular HttpClient, or anything else,
     since they all funnel through the same browser network stack. Never

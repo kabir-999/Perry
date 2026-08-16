@@ -90,15 +90,18 @@ export default function Home() {
         </div>
       )}
 
-      <div className="flex h-16 items-center justify-between bg-[#12b3ad] px-6">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 bg-[#12b3ad] px-4 py-2 sm:h-24 sm:flex-nowrap sm:px-6">
         <Link to="/" aria-label="Go to home">
           <MascotLogo size="md" />
         </Link>
         {!loading && (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {user ? (
               <>
-                <span className="text-sm font-medium text-white" title={user.email}>
+                <span
+                  className="max-w-[7rem] truncate text-sm font-medium text-white sm:max-w-none"
+                  title={user.email}
+                >
                   {user.display_name || user.email}
                 </span>
                 <button
@@ -135,7 +138,7 @@ export default function Home() {
               Security scanning for teams without a security team
             </p>
 
-            <h1 className="mt-4 max-w-4xl text-5xl font-black uppercase leading-[1.03] tracking-normal text-[#4b2104] sm:text-6xl lg:text-7xl">
+            <h1 className="mt-4 max-w-4xl break-words text-4xl font-black uppercase leading-[1.03] tracking-normal text-[#4b2104] sm:text-6xl lg:text-7xl">
               Find vulnerabilities
               <br />
               before attackers do

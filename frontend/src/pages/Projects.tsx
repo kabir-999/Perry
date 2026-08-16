@@ -21,7 +21,7 @@ export default function Projects() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <div>
           <h2 className="text-xl font-semibold text-[#123331]">Projects</h2>
           <p className="mt-1 text-sm text-[#4f716c]">
@@ -31,7 +31,7 @@ export default function Projects() {
         </div>
         <Link
           to="/scans/new"
-          className="lift rounded-xl bg-[#8d5428] px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-[#6f3f1f]"
+          className="lift shrink-0 rounded-xl bg-[#8d5428] px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-[#6f3f1f]"
         >
           Scan a Website
         </Link>

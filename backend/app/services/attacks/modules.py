@@ -56,7 +56,7 @@ _TRAV_PAYLOADS = [
     "..\\..\\..\\..\\..\\windows\\win.ini",
     "..%5c..%5c..%5c..%5cwindows%5cwin.ini",
 ]
-# XSS — the same executable-context sentinel `<z>` delivered through several
+# XSS — the same executable-context Perry `<z>` delivered through several
 # breakout contexts (HTML text, attribute/tag, RCDATA, script block), so a
 # survived raw `<z>` is caught whatever the surrounding context.
 _XSS_PAYLOADS = [

@@ -1,4 +1,4 @@
-"""Add Sentinel Risk Model output to scans
+"""Add Perry Risk Model output to scans
 
 Revision ID: f1a2b3c4d5e6
 Revises: ef1c2d3e4b67
@@ -14,9 +14,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('scans', sa.Column('sentinel_risk_json', sa.Text(),
+    op.add_column('scans', sa.Column('Perry_risk_json', sa.Text(),
                                      nullable=False, server_default=''))
 
 
 def downgrade() -> None:
-    op.drop_column('scans', 'sentinel_risk_json')
+    op.drop_column('scans', 'Perry_risk_json')

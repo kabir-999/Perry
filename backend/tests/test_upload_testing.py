@@ -38,7 +38,7 @@ async def test_accepting_only_benign_canary_is_low_severity_not_weak_validation(
         files = kwargs.get("files") or {}
         # Only accept the plain-text canary; reject the disallowed/traversal ones.
         _, (filename, _content, _ct) = next(iter(files.items()))
-        if filename == "sentinel_canary.txt":
+        if filename == "Perry_canary.txt":
             return ok_result(url, status_code=200)
         return ok_result(url, status_code=415)
 
@@ -50,16 +50,16 @@ async def test_accepting_only_benign_canary_is_low_severity_not_weak_validation(
 
 
 async def test_accessible_uploaded_content_escalates_to_confirmed():
-    """Only escalate to a verified/confirmed finding when Sentinel can
+    """Only escalate to a verified/confirmed finding when Perry can
     actually fetch back its own canary content — never guess."""
 
     def responder(url, **kwargs):
         if kwargs.get("files"):
             return ok_result(
-                url, status_code=201, headers={"location": "/uploads/sentinel_canary.php"}
+                url, status_code=201, headers={"location": "/uploads/Perry_canary.php"}
             )
         # The follow-up GET to confirm accessibility.
-        return ok_result(url, status_code=200, text="sentinel-upload-canary")
+        return ok_result(url, status_code=200, text="Perry-upload-canary")
 
     fetcher = FakeFetcher(responder)
     findings = await check_upload_endpoint(fetcher, _upload())

@@ -2,7 +2,7 @@
 Residual risk-model helpers.
 
 The old CVSS-vector + hardening-model + "top finding + bounded headroom"
-aggregation (`calculate_sentinel_risk`) has been removed. Risk is now the
+aggregation (`calculate_Perry_risk`) has been removed. Risk is now the
 pure 5-factor per-finding formula in `risk_engine.py`, and overall
 application risk is the highest confirmed finding's score
 (`risk_engine.overall_confirmed_risk`) — see ARCHITECTURE.md.

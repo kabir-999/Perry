@@ -589,7 +589,7 @@ _JS_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 # Extension -> tree-sitter grammar name, for the 6 polyglot languages
 # (polyglot_sast.py). Kept here (not just in polyglot_sast) so
 # `analyze_sources`/`compute_language_coverage` have one shared source of
-# truth for "which extensions are source code Sentinel understands at all".
+# truth for "which extensions are source code Perry understands at all".
 _POLYGLOT_EXT = {
     ".java": "java", ".go": "go", ".php": "php", ".rb": "ruby",
     ".rs": "rust", ".cs": "csharp",

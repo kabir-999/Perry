@@ -8,7 +8,10 @@ type MascotLogoProps = {
 
 const SIZE_CLASS = {
   sm: "h-10 w-24",
-  md: "h-14 w-36",
+  // Used for every page's top-left header logo (Login, Home, the
+  // authenticated Layout nav) — bumped up since it was reading too small
+  // there. Scales down a step on phones so it doesn't crowd a narrow header.
+  md: "h-14 w-36 sm:h-20 sm:w-52",
   lg: "h-28 w-72 sm:h-36 sm:w-96",
 };
 

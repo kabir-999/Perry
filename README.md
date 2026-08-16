@@ -1,4 +1,4 @@
-# Sentinel — Web Application Security Scanner
+# Perry — Web Application Security Scanner
 
 A full-stack platform for **authorized security assessments** of live web
 applications. A user registers a target and gets:
@@ -79,16 +79,16 @@ GraphQL/WebSocket-specific attacks, etc.).
   but wasn't verified) and `INCONCLUSIVE` (verified attempt, ambiguous
   evidence). **Known limitation**: if the login page is reachable only via a
   JS-driven menu/click the browser crawler doesn't happen to trigger (rather
-  than a discoverable link or form), Sentinel will honestly report no auth
+  than a discoverable link or form), Perry will honestly report no auth
   surface found rather than guessing one exists.
 - **Opt-in authenticated scanning**: a developer-supplied test-account
   credential (`VerifiedTarget.auth_header`, set via
   `POST /api/targets/{id}/credential`) is attached to the browser crawl and
-  active tests when a scan sets `authenticated_scan: true`. Sentinel never
+  active tests when a scan sets `authenticated_scan: true`. Perry never
   self-registers or generates a credential — the account must already exist
   in the authorized test environment.
 - **Two-account authorization (IDOR/BOLA) testing**: with a second
-  credential (`VerifiedTarget.auth_header_b`), Sentinel requests a resource
+  credential (`VerifiedTarget.auth_header_b`), Perry requests a resource
   id actually observed under Account A's session using Account B's session.
   A finding fires only on a byte-identical, reproducible response — never
   against a guessed id or an arbitrary third-party account.
@@ -248,7 +248,7 @@ playwright install chromium
 ```
 
 This is not a hard dependency — if Chromium isn't installed, the browser
-crawler degrades gracefully and Sentinel falls back to the static crawler
+crawler degrades gracefully and Perry falls back to the static crawler
 alone, with a note in scan debug output.
 
 Run the database migrations:
@@ -307,7 +307,7 @@ python -m app.cli scan /path/to/repo --fail-on high --json report.json
 Two independent gates decide the exit code: `--fail-on {info,low,medium,high,critical}`
 (did any finding meet/exceed this severity) and `--max-risk N` (did the
 5-factor risk score exceed N/100) — a low risk score never overrides a
-failed severity gate, and vice versa. `.github/workflows/sentinel.yml` wires
+failed severity gate, and vice versa. `.github/workflows/Perry.yml` wires
 this into CI on every push/PR.
 
 **Language coverage** — real AST-based taint tracking (source → sanitizer →
@@ -355,9 +355,9 @@ crates.io, and NuGet**.
 Registering a target (`POST /api/targets`) issues a one-time verification
 token. Prove control of the host via **one** of:
 
-- DNS TXT record at `_sentinel.<hostname>` containing the token
-- `/.well-known/sentinel-verification.txt` containing the token
-- `<meta name="sentinel-verification" content="<token>">` on the homepage
+- DNS TXT record at `_Perry.<hostname>` containing the token
+- `/.well-known/Perry-verification.txt` containing the token
+- `<meta name="Perry-verification" content="<token>">` on the homepage
 
 Then call `POST /api/targets/{id}/verify`. Until verified (or expired —
 tokens are valid 90 days), scans against that host run **passive-only**: no
@@ -511,7 +511,7 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | ai_error / ai_summary / ai_recommendation | Text | |
 | risk_score | Integer | 0–100, set only by the AI analyst |
 | risk_factors_json / test_results_json | Text | |
-| sentinel_risk_json | Text | Sentinel Risk Model v1 output (score, band, contributors) |
+| Perry_risk_json | Text | Perry Risk Model v1 output (score, band, contributors) |
 | created_at / started_at / completed_at | DateTime(tz), nullable except created_at | |
 
 ### `scan_events`
@@ -651,9 +651,9 @@ Honestly, not aspirationally — these are the current, real edges:
 - **Browser crawling is discovery-bounded, not exhaustive**: it follows
   same-origin links and reads the rendered DOM's forms, but does not open
   menus, scroll-triggered content, or multi-step flows. A login page reachable
-  only through such interaction may not be discovered — Sentinel then reports
+  only through such interaction may not be discovered — Perry then reports
   authentication honestly as not-found rather than guessing.
-- **No self-service registration**: Sentinel never creates a test account on
+- **No self-service registration**: Perry never creates a test account on
   a target — a human creates it once in the authorized environment and
   supplies the session.
 
@@ -725,6 +725,6 @@ development; the CLI needs neither.
 ## Further Reading
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full pipeline diagram, the
-Sentinel Risk Model's scoring rules, and a log of recent robustness
+Perry Risk Model's scoring rules, and a log of recent robustness
 hardening (false-positive/negative fixes across secret detection,
 dependency scanning, discovery, and correlation).
