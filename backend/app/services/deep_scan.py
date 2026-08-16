@@ -205,7 +205,7 @@ async def run_deep_scan(
             ),
             discover_subdomains(scope),
             discover_directories(fetcher, scope, not_found, passive_only=passive_only),
-            browser_crawl(scope, _seed, strategy="bfs", auth_header=browser_auth_headers),
+            browser_crawl(scope, _seed, auth_header=browser_auth_headers),
         )
         browser_result = bfs_result
         result.subdomains = subdomains

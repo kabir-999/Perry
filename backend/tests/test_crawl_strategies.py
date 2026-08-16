@@ -1,10 +1,17 @@
-"""BFS vs DFS frontier behaviour + per-strategy graph merge/stats/score."""
+"""BFS frontier behaviour + graph merge/stats/score.
+
+A second, DFS/LIFO-stack strategy used to live alongside BFS here, run as a
+full second browser crawl for a BFS-vs-DFS comparison — removed entirely
+(see browser_crawler.py's _Frontier docstring): on a memory-constrained
+instance, a second full Chromium cycle was pure cost for little unique
+coverage BFS's priority ordering didn't already mostly cover.
+"""
 from app.services import attack_graph as G
 from app.services.browser_crawler import _Frontier
 
 
-def test_bfs_frontier_pops_highest_priority_first():
-    f = _Frontier("bfs")
+def test_frontier_pops_highest_priority_first():
+    f = _Frontier()
     f.push(5, 1, "a", 0)
     f.push(20, 2, "b", 0)
     f.push(10, 3, "c", 0)
@@ -12,18 +19,8 @@ def test_bfs_frontier_pops_highest_priority_first():
     assert order == ["b", "c", "a"]  # by score, high -> low
 
 
-def test_dfs_frontier_is_lifo():
-    f = _Frontier("dfs")
-    f.push(5, 1, "a", 0)
-    f.push(20, 2, "b", 0)
-    f.push(10, 3, "c", 0)
-    order = [f.pop()[1] for _ in range(3)]
-    assert order == ["c", "b", "a"]  # last in, first out (depth-first)
-
-
-def test_dfs_defaults_and_truthiness():
-    f = _Frontier("weird")  # anything not "dfs" is bfs
-    assert f.strategy == "bfs"
+def test_frontier_truthiness():
+    f = _Frontier()
     assert not f
     f.push(1, 1, "x", 0)
     assert f

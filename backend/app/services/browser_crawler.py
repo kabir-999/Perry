@@ -112,47 +112,43 @@ def _clog(result: BrowserCrawlResult, event: str, **fields) -> None:
 
 
 class _Frontier:
-    """The only difference between the two crawl strategies: BFS pops the
-    highest-priority pending URL (a max-heap over attack-surface score); DFS
-    pops the most-recently-discovered URL (a LIFO stack), diving down a branch
-    before backtracking. Both are bounded identically by the shared ``visited``
-    set and ``max_depth`` in the caller, so DFS cannot loop or recurse
-    forever."""
+    """Priority max-heap over attack-surface score — always visits the
+    highest-value pending URL next. Bounded by the shared ``visited`` set and
+    ``max_depth`` in the caller.
 
-    def __init__(self, strategy: str) -> None:
-        self.strategy = "dfs" if strategy == "dfs" else "bfs"
+    (A second, DFS/LIFO-stack strategy used to live here, run as a full
+    second concurrent-then-sequential browser crawl for a BFS-vs-DFS
+    comparison. Removed entirely: on a memory-constrained instance, a second
+    full Chromium launch+render+interact cycle was pure cost — real memory
+    pressure (a contributor to container OOM restarts) and real wall-clock
+    time — for coverage BFS's priority ordering already mostly subsumed
+    within the same page budget.)
+    """
+
+    def __init__(self) -> None:
         self._heap: list[tuple[int, int, str, int]] = []
-        self._stack: list[tuple[int, int, str, int]] = []
 
     def push(self, score: int, seq: int, url: str, depth: int) -> None:
-        if self.strategy == "dfs":
-            self._stack.append((score, seq, url, depth))
-        else:
-            heapq.heappush(self._heap, (-score, seq, url, depth))
+        heapq.heappush(self._heap, (-score, seq, url, depth))
 
     def pop(self) -> tuple[int, str, int]:
-        if self.strategy == "dfs":
-            score, _seq, url, depth = self._stack.pop()
-            return score, url, depth
         neg, _seq, url, depth = heapq.heappop(self._heap)
         return -neg, url, depth
 
     def __bool__(self) -> bool:
-        return bool(self._stack or self._heap)
-
+        return bool(self._heap)
 
 
 async def browser_crawl(
     scope: TargetScope,
     seed_url: str,
     *,
-    strategy: str = "bfs",
     max_pages: int | None = None,
     max_depth: int | None = None,
     auth_header: dict[str, str] | None = None,
 ) -> BrowserCrawlResult:
     result = BrowserCrawlResult()
-    result.strategy = "dfs" if strategy == "dfs" else "bfs"
+    result.strategy = "bfs"
 
     if not _PLAYWRIGHT_AVAILABLE:
         msg = "Playwright not installed - browser crawling skipped, falling back to static crawler only."
@@ -169,8 +165,7 @@ async def browser_crawl(
     seed_norm = G.normalize_url(seed_url)
     root_id = graph.add_node(seed_norm, depth=0, discovery="seed", method="GET")
     visited: set[str] = {G.dedup_key(seed_norm)}
-    # BFS = priority max-heap; DFS = LIFO stack. Same visited/max-depth bounds.
-    frontier = _Frontier(result.strategy)
+    frontier = _Frontier()
     seq = [0]
     current_page_id = [root_id]
 
@@ -225,6 +220,12 @@ async def browser_crawl(
                     # this container, but worth knowing if that ever changes.
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
+                    # Caps each renderer's V8 JS heap — a page's own script
+                    # normally has no memory ceiling at all in Chrome; on a
+                    # scanner that never needs one page to comfortably run
+                    # a full SPA's production workload indefinitely, this
+                    # bounds the worst case instead of leaving it uncapped.
+                    "--js-flags=--max-old-space-size=128",
                 ],
             )
             try:
@@ -233,6 +234,12 @@ async def browser_crawl(
                 context = await browser.new_context(
                     user_agent=settings.SCANNER_USER_AGENT,
                     ignore_https_errors=True,
+                    # We only need DOM/JS/network access, never visual
+                    # fidelity — a smaller viewport means a smaller
+                    # compositing buffer (roughly half the pixels of
+                    # Playwright's 1280x720 default), a real memory saving
+                    # on a constrained instance.
+                    viewport={"width": 800, "height": 600},
                 )
                 if auth_header:
                     await context.set_extra_http_headers(auth_header)
