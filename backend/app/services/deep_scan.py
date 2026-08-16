@@ -201,8 +201,21 @@ async def run_deep_scan(
 
         # --- Discovery phase 1: static crawl + subdomains + directories +
         # two browser crawls (BFS + DFS, same interaction engine) ---
+        #
+        # The BFS and DFS browser crawls each launch their own full headless
+        # Chromium instance. Running them concurrently (as this used to)
+        # means two Chromium processes competing for the same CPU/RAM at
+        # once — on a memory-constrained instance that isn't free
+        # parallelism, it's resource contention: peak memory roughly
+        # doubles (a real cause of container OOM restarts) and wall-clock
+        # time often gets *worse*, not better, once the container starts
+        # swapping/thrashing under the pressure. The cheap, mostly
+        # I/O-bound static-crawl/subdomain/directory work still overlaps
+        # with the browser phase via gather; only the two heavy browser
+        # crawls are serialized, so peak memory only ever includes one
+        # Chromium instance.
         _seed = fast_result.homepage_url or scope.origin
-        crawl_result, subdomains, (dir_paths, dir_findings), bfs_result, dfs_result = await asyncio.gather(
+        static_phase = asyncio.gather(
             crawl(
                 fetcher, scope,
                 seed_url=_seed,
@@ -212,9 +225,10 @@ async def run_deep_scan(
             ),
             discover_subdomains(scope),
             discover_directories(fetcher, scope, not_found, passive_only=passive_only),
-            browser_crawl(scope, _seed, strategy="bfs", auth_header=browser_auth_headers),
-            browser_crawl(scope, _seed, strategy="dfs", auth_header=browser_auth_headers),
         )
+        bfs_result = await browser_crawl(scope, _seed, strategy="bfs", auth_header=browser_auth_headers)
+        dfs_result = await browser_crawl(scope, _seed, strategy="dfs", auth_header=browser_auth_headers)
+        crawl_result, subdomains, (dir_paths, dir_findings) = await static_phase
         # The union of both strategies feeds the rest of the pipeline, so
         # nothing either one found is missed by the attack phase.
         browser_result = _merge_browser_results(bfs_result, dfs_result)
