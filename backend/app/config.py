@@ -148,11 +148,6 @@ class Settings(BaseSettings):
     # navigation/clicks can fan out fast, and this is a different cost
     # profile (a real browser tab) than a pooled httpx request.
     BROWSER_MAX_REQUESTS: int = 150
-    # A SPA route reachable only via a JS navigate() (no real <a href>) is
-    # invisible to link-scraping alone, so the crawler also clicks every
-    # interactive element on each page. Bounded per-page so one link-heavy
-    # page can't consume the whole browser request budget by itself.
-    BROWSER_CLICK_BUDGET_PER_PAGE: int = 20
 
     # --- Debug mode (Part 18): bracketed-tag trace of what was discovered/
     # tested and why, at logging.DEBUG. Zero cost when off.
