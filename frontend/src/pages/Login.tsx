@@ -89,7 +89,13 @@ export default function Login() {
 
   return (
     <div className="platypus-field min-h-screen bg-[#eef8f5]">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-4">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-8">
+        <header className="flex items-center gap-2.5">
+          <Link to="/" aria-label="Go to home">
+            <MascotLogo size="md" />
+          </Link>
+        </header>
+
         <Hero />
         <AuthPanel
             side={side}
@@ -117,17 +123,15 @@ export default function Login() {
 
 function Hero() {
   return (
-    <div className="animate-rise pt-2 text-center sm:pt-4">
+    <div className="animate-rise pt-8 text-center sm:pt-10">
       <div className="flex justify-center">
-        <Link to="/" aria-label="Go to home">
-          <MascotLogo size="md" />
-        </Link>
+        <MascotLogo size="lg" />
       </div>
-      <p className="mx-auto mt-3 max-w-xl text-[15px] leading-relaxed text-[#4f716c]">
+      <p className="mx-auto mt-5 max-w-xl text-[15px] leading-relaxed text-[#4f716c]">
         Scan a site you own end to end — attack surface, live vulnerabilities,
         and the source behind them — before it ships.
       </p>
-      <div className="mt-4 flex flex-wrap justify-center gap-2">
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
         {[
           "Crawl & attack surface",
           "12 attack modules",
@@ -179,17 +183,17 @@ function AuthPanel({
   onSubmit,
 }: PanelProps) {
   const field =
-    "w-full rounded-xl border border-[#8fbab1] bg-[#eef8f5] px-4 py-2.5 text-sm text-[#123331] outline-none transition-colors";
+    "w-full rounded-xl border border-[#8fbab1] bg-[#eef8f5] px-4 py-3 text-sm text-[#123331] outline-none transition-colors";
 
   return (
-    <div className="flex flex-1 items-start justify-center py-4 sm:py-6">
+    <div className="flex flex-1 items-start justify-center py-10">
       <div className="w-full max-w-md">
         <div
           className="animate-slide-in overflow-hidden rounded-2xl border bg-[#fbf7ef] shadow-xl"
           style={{ borderColor: side.ring }}
         >
           <div
-            className="px-7 py-4"
+            className="px-7 py-5"
             style={{ background: side.tint, borderBottom: `1px solid ${side.ring}` }}
           >
             <p
@@ -213,8 +217,8 @@ function AuthPanel({
             </p>
           </div>
 
-          <form onSubmit={onSubmit} className="px-7 py-5">
-            <div className="mb-4 flex rounded-xl border border-[#b9d6cf] bg-[#dff0ec] p-1">
+          <form onSubmit={onSubmit} className="px-7 py-6">
+            <div className="mb-5 flex rounded-xl border border-[#b9d6cf] bg-[#dff0ec] p-1">
               {(["login", "signup"] as const).map((m) => {
                 const active = mode === m;
                 return (
@@ -240,7 +244,7 @@ function AuthPanel({
             </div>
 
             {mode === "signup" && (
-              <div className="animate-fade mb-3">
+              <div className="animate-fade mb-4">
                 <label className="mb-1.5 block text-sm font-medium text-[#254c48]">
                   Name{" "}
                   <span className="font-normal text-[#4f716c]">(optional)</span>
@@ -267,7 +271,7 @@ function AuthPanel({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
-              className={`${field} mb-3`}
+              className={`${field} mb-4`}
               onFocus={(e) => (e.currentTarget.style.borderColor = side.accent)}
               onBlur={(e) => (e.currentTarget.style.borderColor = "#8fbab1")}
             />
@@ -301,7 +305,7 @@ function AuthPanel({
             <button
               type="submit"
               disabled={submitting}
-              className="lift mt-4 w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="lift mt-6 w-full rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               style={{
                 background: side.accent,
                 boxShadow: `0 10px 24px -12px ${side.accent}`,
@@ -314,7 +318,7 @@ function AuthPanel({
                   : "Create account"}
             </button>
 
-            <p className="mt-3 text-center text-[13px] text-[#4f716c]">
+            <p className="mt-4 text-center text-[13px] text-[#4f716c]">
               {mode === "login" ? "Don't have an account? " : "Already have one? "}
               <button
                 type="button"
