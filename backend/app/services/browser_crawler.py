@@ -202,7 +202,31 @@ async def browser_crawl(
 
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=[
+                    # The most common cause of a container OOM-killing
+                    # Chromium specifically: Chrome renders tabs using
+                    # /dev/shm, which Docker defaults to a tiny 64MB —
+                    # this makes it use regular temp files instead.
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-default-apps",
+                    "--disable-sync",
+                    "--mute-audio",
+                    "--no-first-run",
+                    # Render (and most constrained container platforms) don't
+                    # grant the extra kernel capabilities Chrome's sandbox
+                    # needs, so it fails to launch at all without this. This
+                    # does reduce the browser's own process isolation —
+                    # acceptable here since nothing else sensitive runs in
+                    # this container, but worth knowing if that ever changes.
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                ],
+            )
             try:
                 # One context for the whole crawl => cookies / auth persist
                 # (session persistence).
