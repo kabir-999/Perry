@@ -118,25 +118,6 @@ class _Cancelled(Exception):
     pass
 
 
-def _merge_browser_results(a: BrowserCrawlResult, b: BrowserCrawlResult) -> BrowserCrawlResult:
-    """Union two browser-crawl results (BFS + DFS) so the rest of the pipeline
-    sees everything either strategy discovered."""
-    m = BrowserCrawlResult()
-    m.pages = a.pages + b.pages
-    m.network_requests = a.network_requests + b.network_requests
-    m.forms = a.forms + b.forms
-    m.params = a.params + b.params
-    m.js_bundle_urls = set(a.js_bundle_urls) | set(b.js_bundle_urls)
-    m.websocket_urls = set(a.websocket_urls) | set(b.websocket_urls)
-    m.spa_routes = set(a.spa_routes) | set(b.spa_routes)
-    m.errors = a.errors + b.errors
-    m.pages_rendered = a.pages_rendered + b.pages_rendered
-    m.interactions_performed = a.interactions_performed + b.interactions_performed
-    m.max_depth_reached = max(a.max_depth_reached, b.max_depth_reached)
-    m.graph = attack_graph.merge_graphs(a.graph or {}, b.graph or {})
-    return m
-
-
 def _strategy_payload(res: BrowserCrawlResult) -> dict:
     """Per-strategy crawl-layer summary: graph + discovery score + stats + log."""
     stats = attack_graph.graph_stats(res.graph or {})
@@ -200,22 +181,21 @@ async def run_deep_scan(
             browser_auth_headers = {name.strip(): value.strip()} if sep else {"Authorization": auth_header}
 
         # --- Discovery phase 1: static crawl + subdomains + directories +
-        # two browser crawls (BFS + DFS, same interaction engine) ---
+        # one browser crawl (BFS) ---
         #
-        # The BFS and DFS browser crawls each launch their own full headless
-        # Chromium instance. Running them concurrently (as this used to)
-        # means two Chromium processes competing for the same CPU/RAM at
-        # once — on a memory-constrained instance that isn't free
-        # parallelism, it's resource contention: peak memory roughly
-        # doubles (a real cause of container OOM restarts) and wall-clock
-        # time often gets *worse*, not better, once the container starts
-        # swapping/thrashing under the pressure. The cheap, mostly
-        # I/O-bound static-crawl/subdomain/directory work still overlaps
-        # with the browser phase via gather; only the two heavy browser
-        # crawls are serialized, so peak memory only ever includes one
-        # Chromium instance.
+        # This used to also run a second, DFS-strategy browser crawl —
+        # concurrently at first (two full Chromium instances competing for
+        # the same CPU/RAM, a real cause of container OOM restarts), then
+        # sequentially (safe on memory, but still a second full
+        # launch+render+interact cycle added to every scan's wall-clock
+        # time). BFS's priority-ordered frontier (highest attack-surface
+        # score first) already covers the same ground DFS did within the
+        # same page budget, so the second full browser cycle was pure
+        # latency with little unique discovery to show for it. The cheap,
+        # mostly I/O-bound static-crawl/subdomain/directory work still runs
+        # concurrently with the one remaining browser crawl.
         _seed = fast_result.homepage_url or scope.origin
-        static_phase = asyncio.gather(
+        crawl_result, subdomains, (dir_paths, dir_findings), bfs_result = await asyncio.gather(
             crawl(
                 fetcher, scope,
                 seed_url=_seed,
@@ -225,17 +205,13 @@ async def run_deep_scan(
             ),
             discover_subdomains(scope),
             discover_directories(fetcher, scope, not_found, passive_only=passive_only),
+            browser_crawl(scope, _seed, strategy="bfs", auth_header=browser_auth_headers),
         )
-        bfs_result = await browser_crawl(scope, _seed, strategy="bfs", auth_header=browser_auth_headers)
-        dfs_result = await browser_crawl(scope, _seed, strategy="dfs", auth_header=browser_auth_headers)
-        crawl_result, subdomains, (dir_paths, dir_findings) = await static_phase
-        # The union of both strategies feeds the rest of the pipeline, so
-        # nothing either one found is missed by the attack phase.
-        browser_result = _merge_browser_results(bfs_result, dfs_result)
+        browser_result = bfs_result
         result.subdomains = subdomains
         crawl_limit_reached = (
             len(crawl_result.pages) >= settings.CRAWL_MAX_PAGES
-            or max(len(bfs_result.pages), len(dfs_result.pages)) >= settings.BROWSER_CRAWL_MAX_PAGES
+            or len(bfs_result.pages) >= settings.BROWSER_CRAWL_MAX_PAGES
         )
         scan_errors = bool([e for e in browser_result.errors if "not installed" not in e.lower()])
         for p in crawl_result.pages:
@@ -394,10 +370,12 @@ async def run_deep_scan(
         result.attack_graph = attack_graph.build_attack_graph(
             scope.origin, getattr(browser_result, "graph", {}) or {}, endpoints_for_graph,
         )
-        # Per-strategy crawl layer (BFS vs DFS): own graph, score, stats, log.
+        # Per-strategy crawl layer — own graph, score, stats, log. DFS was
+        # dropped (see the discovery-phase comment above); only BFS remains,
+        # so the frontend's "DFS" comparison tab has nothing to key off and
+        # won't render.
         result.crawl_strategies = {
             "bfs": _strategy_payload(bfs_result),
-            "dfs": _strategy_payload(dfs_result),
         }
 
         cov = compute_coverage(inv, executions)

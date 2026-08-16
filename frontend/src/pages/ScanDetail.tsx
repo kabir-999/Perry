@@ -1383,7 +1383,7 @@ function AttackSurfaceGraphPanel({
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {tab("combined", "Combined")}
         {strategies && tab("bfs", "BFS", strategies.bfs?.score)}
-        {strategies && tab("dfs", "DFS", strategies.dfs?.score)}
+        {strategies?.dfs && tab("dfs", "DFS", strategies.dfs.score)}
         <span className="mx-1 h-4 w-px bg-[#d6c9b0]" />
         <button
           onClick={() => setView("graph")}
