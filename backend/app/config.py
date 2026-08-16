@@ -29,7 +29,13 @@ class Settings(BaseSettings):
     # --- App ---
     APP_NAME: str = "Web Application Security Fuzzer"
     ENVIRONMENT: str = "development"
-    DEBUG: bool = True
+    # Defaults to off: this also drives SQLAlchemy's `echo` (database.py),
+    # which fully serializes and logs every query + bound parameters on
+    # every request — real CPU/I/O overhead on every single request, not
+    # just noisy logs, and easy to deploy accidentally since the app
+    # otherwise "just works" with it left on. Set DEBUG=true locally in
+    # .env if you want that SQL echo back for local debugging.
+    DEBUG: bool = False
     API_PREFIX: str = "/api"
 
     # --- CORS ---
