@@ -691,11 +691,21 @@ base URL must be configured explicitly (see below).
    app.main:app --host 0.0.0.0 --port $PORT`), plus a health check against
    `/api/health`. Deploy and note the public Railway URL — you'll need it
    for the frontend.
-5. Playwright-based browser crawling degrades gracefully if Chromium isn't
-   installed (Railway's default Nixpacks build won't have it); everything
-   else works unaffected. Installing Chromium there would need a custom
-   Dockerfile — out of scope unless you specifically need JS/SPA crawling
-   in production.
+5. Playwright-based browser crawling (SPA click-through discovery, network
+   capture, cross-origin backend auto-testing) needs a real Chromium binary.
+   Neither Railway's Nixpacks build nor Render's native Python runtime can
+   install it — both lack apt/root access, so `playwright install chromium`
+   there only downloads a binary that fails to launch (missing system
+   libraries), and the browser crawler silently degrades to the static
+   HTML-only crawler. `backend/Dockerfile` fixes this: it installs Chromium
+   *and* its OS dependencies via `playwright install --with-deps chromium`
+   (needs a real Debian base + root, hence Docker). To use it: switch the
+   service's runtime to Docker (Render: service Settings → Runtime →
+   Docker; Railway: it auto-detects a Dockerfile) instead of the native
+   Python/Nixpacks build. Verified locally: `docker build` succeeds and a
+   `sync_playwright().chromium.launch()` inside the built image actually
+   renders a page. Everything still works without this — you just lose
+   JS-rendered SPA discovery and only the static crawler runs.
 
 ### Frontend (Vercel)
 
