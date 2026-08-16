@@ -42,10 +42,22 @@ def test_cmd_detect_canary_execution_vs_reflection():
 
 
 def test_xss_detect_any_context_breakout():
-    assert _xss_detect('wf7xq"><z>', "base", '<input value="wf7xq"><z>">')
-    assert _xss_detect("wf7xq</script><z>", "base", "<script>x</script><z>")
+    assert _xss_detect('wf7xq"><z>', "base", '<input value="wf7xq"><z>">', "text/html")
+    assert _xss_detect("wf7xq</script><z>", "base", "<script>x</script><z>", "text/html")
     # Encoded reflection is safe.
-    assert _xss_detect("x", "base", "&lt;z&gt; is encoded") is None
+    assert _xss_detect("x", "base", "&lt;z&gt; is encoded", "text/html") is None
+
+
+def test_xss_detect_requires_html_content_type():
+    """The exact reported false positive: a JSON API's validation error
+    echoes the invalid input verbatim (FastAPI/Pydantic does this by
+    default), so the raw marker survives byte-for-byte — but application/json
+    is never parsed as a document, so there is no executable context at all."""
+    raw = '{"detail":"invalid value: wf7xq<z>\'\\""}'
+    assert _xss_detect("wf7xq<z>'\"", "base", raw, "application/json") is None
+    assert _xss_detect("wf7xq<z>'\"", "base", raw, "") is None
+    # The identical bytes ARE a real finding once actually served as HTML.
+    assert _xss_detect("wf7xq<z>'\"", "base", raw, "text/html; charset=utf-8")
 
 
 async def test_boolean_sqli_fires_without_an_error_signature():

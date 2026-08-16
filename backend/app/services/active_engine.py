@@ -309,7 +309,17 @@ class _Test:
 
 
 # Detectors receive: payload, baseline raw text, test raw text.
-def _xss_detect(payload, base_raw, test_raw):
+def _xss_detect(payload, base_raw, test_raw, content_type=""):
+    # A raw '<z>' surviving in the response body is only "reflected XSS" if a
+    # browser would ever parse that body as HTML and act on it. An API that
+    # replies with, say, a JSON validation error echoing the invalid input
+    # back (FastAPI/Pydantic does this by default) contains the exact same
+    # raw bytes, but application/json is never rendered as a document — the
+    # markersits inert as a JSON string value, not markup. Gating on
+    # content-type is what tells these apart; without it every JSON API
+    # whose error messages happen to echo bad input reads as "vulnerable".
+    if "html" not in content_type.lower():
+        return None
     # Check the RAW response — the marker's angle brackets are stripped from
     # visible_text. A raw '<z>' that was NOT in the baseline means the injected
     # markup survived unescaped (an executable HTML context), regardless of
@@ -319,13 +329,13 @@ def _xss_detect(payload, base_raw, test_raw):
     return None
 
 
-def _sqli_detect(payload, base_raw, test_raw):
+def _sqli_detect(payload, base_raw, test_raw, content_type=""):
     if _SQL_ERR.search(test_raw) and not _SQL_ERR.search(base_raw):
         return _first(_SQL_ERR, test_raw)
     return None
 
 
-def _trav_detect(payload, base_raw, test_raw):
+def _trav_detect(payload, base_raw, test_raw, content_type=""):
     m = _PASSWD.search(test_raw)
     if m:
         return m.group(0)[:100]
@@ -335,7 +345,7 @@ def _trav_detect(payload, base_raw, test_raw):
     return None
 
 
-def _cmd_detect(payload, base_raw, test_raw):
+def _cmd_detect(payload, base_raw, test_raw, content_type=""):
     if _CMD_EVIDENCE.search(test_raw) and not _CMD_EVIDENCE.search(base_raw):
         return _first(_CMD_EVIDENCE, test_raw)
     # Canary echoed as command OUTPUT (appears without the literal `echo `

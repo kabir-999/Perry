@@ -132,13 +132,13 @@ export default function Home() {
       </div>
 
       <div className="mx-auto max-w-7xl px-6 py-12 sm:px-8 lg:px-12">
-        <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(24rem,0.8fr)]">
+        <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.7fr)]">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#08756f]">
               Security scanning for teams without a security team
             </p>
 
-            <h1 className="mt-4 max-w-4xl break-words text-4xl font-black uppercase leading-[1.03] tracking-normal text-[#4b2104] sm:text-6xl lg:text-7xl">
+            <h1 className="mt-4 max-w-4xl break-words text-4xl font-black uppercase leading-[1.03] tracking-normal text-[#4b2104] sm:text-5xl lg:text-6xl xl:text-7xl">
               Find vulnerabilities
               <br />
               before attackers do

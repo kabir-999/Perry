@@ -148,7 +148,7 @@ async def _probe_param(ctx, ep, pm, payloads, detect, *, encoders=None):
         if not res.ok:
             continue
         debug_log("COMPARE", f"{ep.endpoint_id}/{pm.name} payload={str(payload)[:24]}")
-        ev = detect(payload, base_raw, res.text)
+        ev = detect(payload, base_raw, res.text, res.content_type)
         if ev:
             return ev, payload, base, analyze(res), True
 
@@ -162,7 +162,7 @@ async def _probe_param(ctx, ep, pm, payloads, detect, *, encoders=None):
             res = await _send(ctx.fetcher, target, payload)
             if not res.ok:
                 continue
-            ev = detect(payload, base_raw, res.text)
+            ev = detect(payload, base_raw, res.text, res.content_type)
             if ev:
                 return ev, payload, base, analyze(res), True
 
@@ -241,7 +241,7 @@ async def _probe_path(ctx, ep, payloads, detect):
         res = await ctx.fetcher.fetch(_path_probe_url(ep, payload), use_cache=False, follow_redirects=False)
         if not res.ok:
             continue
-        ev = detect(payload, base_raw, res.text)
+        ev = detect(payload, base_raw, res.text, res.content_type)
         if ev:
             return ev, payload, base, analyze(res)
     return None, None, base, None
