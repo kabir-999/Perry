@@ -20,8 +20,8 @@ import type {
 // vite.config.ts) via the relative "/api" path. In production, this still
 // works when the frontend and backend share one origin behind a reverse
 // proxy; otherwise VITE_API_URL should point at the deployed backend, e.g.
-// "https://your-backend.example.com/api". The Groq API key never touches
-// the frontend — all LLM calls happen server-side.
+// "https://your-backend.example.com/api". Backend secrets never touch the
+// frontend — everything sensitive stays server-side.
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "/api",
 });

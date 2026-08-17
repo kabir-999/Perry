@@ -257,7 +257,7 @@ def meaningfully_different(a: AnalyzedResponse, b: AnalyzedResponse) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Detection primitives (evidence only; Groq judges final severity)
+# Detection primitives (evidence only; deterministic severity comes later)
 # ---------------------------------------------------------------------------
 
 _SQL_ERR = re.compile(
@@ -547,7 +547,7 @@ def _finding(target, test, payload, evidence, confidence, base, analyzed):
         response_summary=f"HTTP {analyzed.status_code}; baseline HTTP {base.status_code}",
         description=f"The '{target.name}' {loc} parameter shows an indicator "
         f"for {test.name.lower()}.",
-        impact="",  # Groq assigns impact from evidence.
+        impact="",
         remediation="",
         dedup_key=f"{test.dedup_prefix}|{urlsplit(target.url).path}|{loc}:{target.name}",
     )

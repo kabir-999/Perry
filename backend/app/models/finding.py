@@ -9,11 +9,10 @@ from app.database import Base
 
 
 class Finding(Base):
-    """A security finding produced by the deterministic scanner and,
-    optionally, annotated by the Groq LLM Security Analyst.
+    """A security finding produced by the deterministic scanner.
 
-    Populated starting in Phase 4 (vulnerability_engine) and enriched in
-    Phase 5 (llm_security_analyst). Left empty of scan logic in Phase 1.
+    Populated starting in Phase 4 (vulnerability_engine). Left empty of
+    scan logic in Phase 1.
     """
 
     __tablename__ = "findings"

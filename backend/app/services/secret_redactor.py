@@ -74,7 +74,7 @@ def redact_json_secrets(text: str) -> str:
 
 
 def redact_secrets_from_summary(summary: dict) -> dict:
-    """Scrub sensitive information from the ScanSummary before sending to Groq."""
+    """Scrub sensitive information from a scan summary before external use."""
     import copy
     
     redacted_summary = copy.deepcopy(summary)

@@ -504,20 +504,18 @@ src/
 ├── components/Layout.tsx top bar / nav
 ├── pages/
 │   ├── NewScan.tsx       single URL input → POST /api/scans
-│   ├── Dashboard.tsx     recent scans + Groq risk + severity chart
-│   └── ScanDetail.tsx    live SSE view: risk hero, AI summary, risk factors,
+│   ├── Dashboard.tsx     recent scans + severity chart
+│   └── ScanDetail.tsx    live SSE view: risk hero, summary, risk factors,
 │                         security-test matrix, findings, PDF export
 ├── services/api.ts       REST client + EventSource (SSE) stream
 └── types/index.ts        shared types
 ```
 
-The Groq API key lives only on the backend and is never sent to the frontend.
-
 ## Scan lifecycle
 
 ```
 QUEUED → FAST_SCANNING → INITIAL_RESULT_READY → DEEP_SCANNING
-       → AI_ANALYSIS → COMPLETED          (or FAILED / CANCELLED)
+       → COMPLETED                        (or FAILED / CANCELLED)
 ```
 
 ## Test target
@@ -531,6 +529,5 @@ Optimise **time-to-first-result** (Fast Scan), then run the Deep Scan in the
 background. Everywhere: `asyncio` + pooled `httpx.AsyncClient`, bounded
 concurrency, per-scan request budget, response-size caps, request dedup, short
 timeouts, and **baseline → high-value test → variants only if interesting**
-(no brute-forcing every payload against every parameter). One Groq call per
-scan — never per finding or per request.
+(no brute-forcing every payload against every parameter).
 ```

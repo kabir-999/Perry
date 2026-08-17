@@ -217,14 +217,9 @@ actually need to set:
 ```env
 DATABASE_URL=postgresql://web_fuzzer:web_fuzzer@localhost:5432/web_fuzzer
 JWT_SECRET=replace-with-a-real-secret-in-production
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=your_model_here
 GITHUB_TOKEN=optional_pat_for_higher_repo_clone_rate_limits
 ```
 
-* `GROQ_API_KEY`/`GROQ_MODEL` are read by `config.py`; if unset, the web
-  pipeline still runs and reports "AI analysis unavailable" instead of a
-  fabricated score. The CLI never calls Groq at all.
 * `JWT_SECRET` ships with an obvious dev placeholder — **override it before
   deploying anywhere reachable**.
 * **Never** commit `.env` — it's in `.gitignore`. Only `config.py` reads
@@ -507,7 +502,7 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | final_risk | String(16) | |
 | deep_progress / urls_discovered / apis_discovered / parameters_discovered / subdomains_discovered / security_checks_completed / findings_count | Integer | live progress counters |
 | ai_status / checks_done_json | String/Text | |
-| risk_score | Integer | 0–100, set only by the AI analyst |
+| risk_score | Integer | 0–100, deterministic outcome score |
 | risk_factors_json / test_results_json | Text | |
 | Perry_risk_json | Text | Perry Risk Model v1 output (score, band, contributors) |
 | created_at / started_at / completed_at | DateTime(tz), nullable except created_at | |
