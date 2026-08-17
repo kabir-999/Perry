@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -145,13 +146,25 @@ class Fetcher:
         request_budget: int,
         max_response_bytes: int,
         rate_limit_per_second: float = 0,
+        max_cache_bytes: int = 25_000_000,
     ) -> None:
         self._client = client
         self._sem = asyncio.Semaphore(max(1, concurrency))
         self._budget = request_budget
         self._max_bytes = max_response_bytes
         self._bucket = _TokenBucket(rate_limit_per_second)
-        self._cache: dict[tuple[str, str, bool], FetchResult] = {}
+        # LRU, byte-capped: a plain unbounded dict here held every unique
+        # cacheable response's full body (up to `max_response_bytes` each)
+        # for the whole scan. On a content-heavy real-world site with a
+        # large request budget, that alone can reach several hundred MB —
+        # a bigger contributor to container OOM than Chromium on such
+        # sites. Caching still avoids redundant re-fetches within a scan
+        # (multiple attack modules often want the same URL); it just no
+        # longer grows without bound — oldest entries are evicted once the
+        # byte cap is hit.
+        self._cache: "OrderedDict[tuple[str, str, bool], FetchResult]" = OrderedDict()
+        self._cache_bytes = 0
+        self._max_cache_bytes = max_cache_bytes
         self._lock = asyncio.Lock()
         self.requests_made = 0
 
@@ -179,6 +192,7 @@ class Fetcher:
         )
         key = (method.upper(), url, follow_redirects)
         if cacheable and key in self._cache:
+            self._cache.move_to_end(key)
             return self._cache[key]
 
         # Reserve a budget slot atomically so concurrent callers can't blow
@@ -199,6 +213,11 @@ class Fetcher:
         )
         if cacheable:
             self._cache[key] = result
+            self._cache.move_to_end(key)
+            self._cache_bytes += result.body_bytes
+            while self._cache_bytes > self._max_cache_bytes and len(self._cache) > 1:
+                _, evicted = self._cache.popitem(last=False)
+                self._cache_bytes -= evicted.body_bytes
         return result
 
     async def _do_fetch(
