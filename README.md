@@ -143,7 +143,7 @@ web-fuzzer/
 │   ├── app/
 │   │   ├── main.py             FastAPI app, routers, CORS
 │   │   ├── cli.py               CI/CD entrypoint: `python -m app.cli scan`
-│   │   ├── config.py            env-driven settings (DB, JWT, Groq, limits)
+│   │   ├── config.py            env-driven settings (DB, JWT, limits)
 │   │   ├── database.py          async SQLAlchemy engine/session
 │   │   ├── models/              SQLAlchemy ORM models (see Database Schema)
 │   │   ├── schemas/              Pydantic request/response schemas
@@ -507,8 +507,6 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | final_risk | String(16) | |
 | deep_progress / urls_discovered / apis_discovered / parameters_discovered / subdomains_discovered / security_checks_completed / findings_count | Integer | live progress counters |
 | ai_status / checks_done_json | String/Text | |
-| ai_analyzed | Boolean | risk_score/level authoritative only when `True` |
-| ai_error / ai_summary / ai_recommendation | Text | |
 | risk_score | Integer | 0–100, set only by the AI analyst |
 | risk_factors_json / test_results_json | Text | |
 | Perry_risk_json | Text | Perry Risk Model v1 output (score, band, contributors) |
@@ -567,7 +565,6 @@ Scan ──(1:N, cascade)──> DiscoveredEndpoint ──(1:N, cascade)──> 
 | url | String(2048) / method / parameter | |
 | evidence / request_summary / response_summary / description / impact / remediation | Text | |
 | risk_score | Float | deterministic score |
-| llm_verdict / llm_confidence / llm_explanation / llm_false_positive_reason | nullable | LLM enrichment |
 | fingerprint | String(512), indexed | stable across scans of the same target; used for OPEN/REGRESSED/UNVERIFIED remediation tracking in the report |
 | created_at | DateTime(tz) | |
 
@@ -715,12 +712,16 @@ base URL must be configured explicitly (see below).
    subdomain — add those too if you need CORS to work from previews, not
    just production).
 
-## No Docker
+## Deployment (AWS EC2)
 
-Beyond the Railway/Vercel configs above, this project intentionally runs
-without Docker at this stage. Use the local setup steps earlier in this
-doc (`uvicorn` + `npm run dev` + a local PostgreSQL instance) for local
-development; the CLI needs neither.
+For a single-box AWS deploy that keeps frontend, backend, and PostgreSQL on
+the same host, see [deploy/aws/README.md](./deploy/aws/README.md). That path
+uses Docker Compose and a fronting Nginx container so the SPA and API can
+share one origin.
+
+The repo still runs fine without Docker for local development: use the setup
+steps earlier in this doc (`uvicorn` + `npm run dev` + a local PostgreSQL
+instance), and the CLI needs neither.
 
 ## Further Reading
 

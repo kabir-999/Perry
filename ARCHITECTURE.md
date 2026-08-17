@@ -169,9 +169,6 @@ app/
 │   ├── risk_model/       Perry Risk Model v1 (see below)
 │   ├── security_graph.py      attack-surface graph used by risk aggregation
 │   ├── scan_summary.py   aggregates everything into ONE structured payload
-│   ├── llm_security_analyst.py  Groq: one call, strict prompt, 1 retry,
-│   │                     Pydantic SecurityAssessment (risk_score/level/
-│   │                     summary/risk_factors/recommendation)
 │   ├── report_generator.py    JSON report (+ frontend builds the PDF);
 │   │                     classifies each finding OPEN/REGRESSED/UNVERIFIED
 │   │                     against the target's last two completed scans by
@@ -184,7 +181,7 @@ app/
 │                         Scan, ScanEvent, DiscoveredEndpoint, Parameter,
 │                         Subdomain, Finding, Report, Repository,
 │                         SourceFinding — see README's Database Schema
-├── config.py             env-driven settings (DB, JWT, Groq, repo-clone,
+├── config.py             env-driven settings (DB, JWT, repo-clone,
 │                         per-stage safety limits)
 └── database.py           async engine/session
 alembic/                  migrations (12, linear — see README)

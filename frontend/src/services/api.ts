@@ -17,10 +17,10 @@ import type {
 } from "../types";
 
 // In local dev, requests are proxied to the FastAPI backend by Vite (see
-// vite.config.ts) via the relative "/api" path. In production (Vercel
-// frontend, Railway backend) there is no shared origin to proxy through, so
-// VITE_API_URL must point at the deployed backend, e.g.
-// "https://your-backend.up.railway.app/api". The Groq API key never touches
+// vite.config.ts) via the relative "/api" path. In production, this still
+// works when the frontend and backend share one origin behind a reverse
+// proxy; otherwise VITE_API_URL should point at the deployed backend, e.g.
+// "https://your-backend.example.com/api". The Groq API key never touches
 // the frontend — all LLM calls happen server-side.
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "/api",

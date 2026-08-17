@@ -92,18 +92,18 @@ def _available_memory_mb() -> float | None:
 
 
 # --- Interaction engine tuning --------------------------------------------
-_MAX_CLICKS_PER_PAGE = 5
-_MAX_FORMS_PER_PAGE = 3
+_MAX_CLICKS_PER_PAGE = 3
+_MAX_FORMS_PER_PAGE = 2
 
 # --- Memory guard (Render Free-tier 512MB containers) ----------------------
 # Below this, don't even launch Chromium — a single heavy real-world page can
 # use several hundred MB across its renderer/main/gpu/utility processes, and
 # starting it when the container is already this tight risks an OOM-kill of
 # the whole process (every in-flight scan, not just this one).
-_MIN_MEMORY_MB_TO_START = 250
+_MIN_MEMORY_MB_TO_START = 350
 # Below this mid-crawl, stop opening new pages and return what's been found
 # so far — better a partial browser crawl than a container restart.
-_MIN_MEMORY_MB_TO_CONTINUE = 160
+_MIN_MEMORY_MB_TO_CONTINUE = 220
 
 # Elements safe to click: they toggle/expand/paginate, they don't submit.
 _SAFE_CLICK_SELECTOR = ", ".join([
@@ -191,6 +191,15 @@ async def browser_crawl(
     result = BrowserCrawlResult()
     result.strategy = "bfs"
     started_at = time.monotonic()
+
+    if settings.SCAN_PROFILE.strip().lower() == "lite":
+        msg = (
+            "Browser crawl disabled by SCAN_PROFILE=lite to keep the scan "
+            "within a small-memory budget."
+        )
+        result.errors.append(msg)
+        debug_log("BROWSER", msg)
+        return result
 
     if not _PLAYWRIGHT_AVAILABLE:
         msg = "Playwright not installed - browser crawling skipped, falling back to static crawler only."
@@ -485,14 +494,14 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             if await el.evaluate("e => !!e.form"):
                 continue
             before = page.url
-            await el.click(timeout=1500, no_wait_after=True)
+            await el.click(timeout=1000, no_wait_after=True)
             clicks += 1
             result.interactions_performed += 1
             _clog(result, "interact", url=page_url, depth=depth, detail="click")
             try:
-                await page.wait_for_load_state("networkidle", timeout=1000)
+                await page.wait_for_load_state("networkidle", timeout=600)
             except Exception:
-                await page.wait_for_timeout(250)
+                await page.wait_for_timeout(150)
             if page.url != before:
                 # The click navigated: record the new route, then restore.
                 enqueue(page.url, depth + 1, G.dedup_key(before), "interaction")
@@ -550,7 +559,7 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             submit = await fh.query_selector("[type='submit'], button:not([type])")
             try:
                 if submit:
-                    await submit.click(timeout=1500, no_wait_after=True)
+                    await submit.click(timeout=1000, no_wait_after=True)
                 else:
                     await fh.evaluate("f => (f.requestSubmit ? f.requestSubmit() : f.submit())")
             except Exception:
@@ -559,9 +568,9 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             result.interactions_performed += 1
             _clog(result, "interact", url=page_url, depth=depth, detail="form-get submit")
             try:
-                await page.wait_for_load_state("networkidle", timeout=1200)
+                await page.wait_for_load_state("networkidle", timeout=800)
             except Exception:
-                await page.wait_for_timeout(300)
+                await page.wait_for_timeout(200)
             if page.url != before:
                 enqueue(page.url, depth + 1, G.dedup_key(page_url), "form-get")
                 if not await _restore(page, page_url):
@@ -575,7 +584,7 @@ async def _restore(page, page_url) -> bool:
     """Return the page to `page_url` after an interaction navigated away, so one
     interaction never corrupts the rest of the crawl. False if it couldn't."""
     try:
-        await page.goto(page_url, timeout=6000, wait_until="domcontentloaded")
+        await page.goto(page_url, timeout=4000, wait_until="domcontentloaded")
         return True
     except Exception:
         return False

@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
+from app.config import settings
 from app.services.discovery_types import DiscoveredParam
 from app.services.finding_types import FindingCandidate
 from app.services.http_client import Fetcher
@@ -613,7 +614,11 @@ async def check_dom_xss(target: ParamTarget) -> list[FindingCandidate]:
     only for query parameters (the only location a browser navigation can
     exercise) and only when Playwright/Chromium are actually available;
     otherwise returns [] so callers can safely call this unconditionally."""
-    if target.location != "query" or not _PLAYWRIGHT_AVAILABLE:
+    if (
+        target.location != "query"
+        or settings.SCAN_PROFILE.strip().lower() == "lite"
+        or not _PLAYWRIGHT_AVAILABLE
+    ):
         return []
 
     probe_url = _set_query(target.url, target.name, _XSS_MARKER)

@@ -17,6 +17,8 @@ that never modify the score.
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import gc
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -118,6 +120,28 @@ class _Cancelled(Exception):
     pass
 
 
+def _release_memory() -> None:
+    """Force freed heap back to the OS after a scan.
+
+    A scan's `Fetcher` (response cache), inventory, findings, and network-
+    request lists are all local to `run_deep_scan` and become garbage once it
+    returns — but on glibc, CPython's allocator does not hand freed memory
+    back to the OS by default; it keeps the arena around for reuse. On a
+    long-lived process on a memory-constrained container, that means RSS
+    creeps up scan after scan even though nothing is actually leaking, until
+    a later scan's Chromium launch tips the container over into OOM. gc.
+    collect() ensures cyclic garbage (dataclasses with back-references,
+    closures in browser_crawler's frontier callbacks) is actually freed
+    first; malloc_trim(0) then asks glibc to release those now-empty arenas
+    back to the OS. Safe no-op on non-glibc platforms (e.g. macOS dev).
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except OSError:
+        pass
+
+
 def _strategy_payload(res: BrowserCrawlResult) -> dict:
     """Per-strategy crawl-layer summary: graph + discovery score + stats + log."""
     stats = attack_graph.graph_stats(res.graph or {})
@@ -153,9 +177,11 @@ async def run_deep_scan(
         max_connections=settings.HTTP_MAX_CONNECTIONS,
         max_keepalive=settings.HTTP_MAX_KEEPALIVE,
     )
+    lite_profile = settings.SCAN_PROFILE.strip().lower() == "lite"
+    concurrency = 4 if lite_profile else settings.DEEP_CONCURRENCY
     fetcher = Fetcher(
         client,
-        concurrency=settings.DEEP_CONCURRENCY,
+        concurrency=concurrency,
         request_budget=settings.DEEP_MAX_REQUESTS,
         max_response_bytes=settings.DEFAULT_MAX_RESPONSE_BYTES,
     )
@@ -181,7 +207,7 @@ async def run_deep_scan(
             browser_auth_headers = {name.strip(): value.strip()} if sep else {"Authorization": auth_header}
 
         # --- Discovery phase 1: static crawl + subdomains + directories +
-        # one browser crawl (BFS) ---
+        # optional browser crawl (BFS) ---
         #
         # This used to also run a second, DFS-strategy browser crawl —
         # concurrently at first (two full Chromium instances competing for
@@ -193,9 +219,15 @@ async def run_deep_scan(
         # same page budget, so the second full browser cycle was pure
         # latency with little unique discovery to show for it. The cheap,
         # mostly I/O-bound static-crawl/subdomain/directory work still runs
-        # concurrently with the one remaining browser crawl.
+        # concurrently with the browser crawl when the scan profile allows
+        # it.
         _seed = fast_result.homepage_url or scope.origin
-        crawl_result, subdomains, (dir_paths, dir_findings), bfs_result = await asyncio.gather(
+        browser_task = (
+            browser_crawl(scope, _seed, auth_header=browser_auth_headers)
+            if not lite_profile
+            else None
+        )
+        tasks = [
             crawl(
                 fetcher, scope,
                 seed_url=_seed,
@@ -205,15 +237,30 @@ async def run_deep_scan(
             ),
             discover_subdomains(scope),
             discover_directories(fetcher, scope, not_found, passive_only=passive_only),
-            browser_crawl(scope, _seed, auth_header=browser_auth_headers),
-        )
-        browser_result = bfs_result
+        ]
+        if browser_task is not None:
+            tasks.append(browser_task)
+
+        gathered = await asyncio.gather(*tasks)
+        crawl_result, subdomains, (dir_paths, dir_findings), *browser_tail = gathered
+        if browser_tail:
+            browser_result = browser_tail[0]
+        else:
+            browser_result = BrowserCrawlResult()
+            browser_result.errors.append(
+                "Browser crawl disabled by SCAN_PROFILE=lite to conserve memory."
+            )
+            debug_log("BROWSER", browser_result.errors[-1])
         result.subdomains = subdomains
         crawl_limit_reached = (
             len(crawl_result.pages) >= settings.CRAWL_MAX_PAGES
-            or len(bfs_result.pages) >= settings.BROWSER_CRAWL_MAX_PAGES
+            or len(browser_result.pages) >= settings.BROWSER_CRAWL_MAX_PAGES
         )
-        scan_errors = bool([e for e in browser_result.errors if "not installed" not in e.lower()])
+        scan_errors = bool([
+            e for e in browser_result.errors
+            if "not installed" not in e.lower()
+            and "disabled by scan_profile=lite" not in e.lower()
+        ])
         for p in crawl_result.pages:
             debug_log("CRAWLER", f"page {p.url}")
         debug_log("BROWSER", f"{len(browser_result.pages)} rendered pages, "
@@ -405,6 +452,7 @@ async def run_deep_scan(
         raise
     finally:
         await client.aclose()
+        _release_memory()
 
 
 # --------------------------------------------------------------------------

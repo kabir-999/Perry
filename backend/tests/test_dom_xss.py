@@ -1,4 +1,5 @@
 """Dedicated tests for the static DOM-XSS analyzer (no JS execution)."""
+import app.services.active_engine as active_engine
 from app.services.dom_xss import analyze_dom_xss
 
 SRC = "https://example.com/app.js"
@@ -38,4 +39,17 @@ def test_dom_xss_no_source():
     """A sink fed by non-source application data is not reported."""
     js = "eval(config.expression);"
     findings = analyze_dom_xss(js, source_url=SRC)
+    assert findings == []
+
+
+async def test_dom_xss_browser_check_skips_in_lite_profile(monkeypatch):
+    monkeypatch.setattr(active_engine.settings, "SCAN_PROFILE", "lite")
+    monkeypatch.setattr(active_engine, "_PLAYWRIGHT_AVAILABLE", True)
+    target = active_engine.ParamTarget(
+        url="https://example.com/?q=test",
+        name="q",
+        location="query",
+        method="GET",
+    )
+    findings = await active_engine.check_dom_xss(target)
     assert findings == []

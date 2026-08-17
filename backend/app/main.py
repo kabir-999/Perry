@@ -63,5 +63,4 @@ async def health_check():
     return {
         "status": "ok",
         "environment": settings.ENVIRONMENT,
-        "groq_configured": settings.groq_configured,
     }

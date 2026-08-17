@@ -80,14 +80,6 @@ class Settings(BaseSettings):
     # background sweep — never retained indefinitely.
     LOG_RETENTION_DAYS: int = 7
 
-    # --- Groq / LLM Security Analyst ---
-    # NOTE: These are read here only. The LLM analysis service itself is
-    # implemented in a later phase. The key must never be hardcoded and
-    # must never be returned to the frontend.
-    GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.1-70b-versatile"
-    GROQ_REQUEST_TIMEOUT_SECONDS: float = 30.0
-
     # Source Code Analysis (Feature 2)
     # Optional GitHub token. Only raises the API rate limit used while
     # auto-discovering the site's repository (60/hr anonymous vs 5000/hr).
@@ -96,6 +88,13 @@ class Settings(BaseSettings):
     REPO_MIN_CONFIDENCE: float = 0.6
     REPO_CLONE_TIMEOUT_SECONDS: float = 120.0
     REPO_MAX_FILES: int = 500
+
+    # --- Scan profile ---
+    # `lite` is the safe default for small deployments: it keeps the scan
+    # pipeline alive on 512MB-1GB tiers by skipping Chromium-driven browser
+    # work and lowering the non-browser fan-out. Switch to `balanced` only
+    # on a bigger box when you want the extra JS/SPA coverage.
+    SCAN_PROFILE: str = "lite"
 
     # --- Scan safety / scope controls (defaults; user never sets these) ---
     DEFAULT_MAX_REQUESTS: int = 400
@@ -119,12 +118,15 @@ class Settings(BaseSettings):
     REDIRECT_MAX_DEPTH: int = 5
 
     # --- Stage 2: Deep Scan ---
-    # Deployed on a dedicated 1GB EC2 instance now (vs. Render's shared
-    # 512MB free tier) — Postgres also moved off-box to RDS, so this
-    # process no longer competes with it for memory either. Raised
-    # proportionally, not unboundedly; the memory guard in
-    # browser_crawler.py still protects against any single heavy site.
-    DEEP_CONCURRENCY: int = 32
+    # Tried raising this for the 1GB EC2 box (vs. Render's 512MB) and it
+    # backfired: nginx + Docker + Chromium overhead ate more of the extra
+    # headroom than expected, and the kernel OOM-killed uvicorn itself
+    # multiple times under the higher concurrency. Reverted to the
+    # 512MB-safe value; see also the explicit gc.collect()+malloc_trim()
+    # after every scan in deep_scan.py, which addresses the real problem
+    # (freed memory not returned to the OS between scans) more directly
+    # than raising concurrency did.
+    DEEP_CONCURRENCY: int = 8
     # Request budget must cover the whole attack surface: with 19 attack
     # modules each probing every eligible parameter, a modest site is easily
     # 1,000-2,000 requests. Set too low (the old 300) it starved later attacks
@@ -144,21 +146,21 @@ class Settings(BaseSettings):
     SUBDOMAIN_ASSESS_LIMIT: int = 5
 
     # Connection pool sizing for the shared httpx.AsyncClient.
-    HTTP_MAX_CONNECTIONS: int = 64
-    HTTP_MAX_KEEPALIVE: int = 32
+    HTTP_MAX_CONNECTIONS: int = 16
+    HTTP_MAX_KEEPALIVE: int = 8
 
     # --- Browser-based crawling (JS/SPA discovery) ---
     # Off by default only in the sense that it degrades gracefully if
     # Chromium isn't installed — when available it always runs, additive
     # to the static crawler, never a replacement for it.
-    BROWSER_CRAWL_MAX_PAGES: int = 12
+    BROWSER_CRAWL_MAX_PAGES: int = 4
     BROWSER_CRAWL_MAX_DEPTH: int = 2
-    BROWSER_NAV_TIMEOUT_SECONDS: float = 8.0
-    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 2.5
+    BROWSER_NAV_TIMEOUT_SECONDS: float = 5.0
+    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 1.0
     # A separate, smaller budget than DEEP_MAX_REQUESTS — browser-driven
     # navigation/clicks can fan out fast, and this is a different cost
     # profile (a real browser tab) than a pooled httpx request.
-    BROWSER_MAX_REQUESTS: int = 160
+    BROWSER_MAX_REQUESTS: int = 48
     # Hard wall-clock ceiling for the *entire* browser_crawl() call, launch
     # included. Per-page/per-interaction timeouts above are individually
     # small, but on a slow/heavy real-world site they add up across many
@@ -166,7 +168,7 @@ class Settings(BaseSettings):
     # never gates the whole scan past a predictable, bounded duration. On
     # timeout, whatever pages/requests were already discovered are kept and
     # returned (graceful partial result), not thrown away.
-    BROWSER_CRAWL_BUDGET_SECONDS: float = 30.0
+    BROWSER_CRAWL_BUDGET_SECONDS: float = 12.0
 
     # --- Debug mode (Part 18): bracketed-tag trace of what was discovered/
     # tested and why, at logging.DEBUG. Zero cost when off.
@@ -174,27 +176,6 @@ class Settings(BaseSettings):
 
     # A neutral, honest User-Agent. Not spoofed to evade detection.
     SCANNER_USER_AGENT: str = "WebFuzzer/0.2 (authorized-security-assessment)"
-
-    # Cap on how many findings are batched into a single Groq call.
-    LLM_MAX_FINDINGS_PER_CALL: int = 12
-
-    @property
-    def groq_configured(self) -> bool:
-        """True only when a *real* key and model are set — placeholder values
-        left over from .env.example count as not configured so we don't fire
-        doomed Groq calls."""
-        key = (self.GROQ_API_KEY or "").strip()
-        model = (self.GROQ_MODEL or "").strip()
-        if not key or not model:
-            return False
-        if "your_" in key.lower() or "your_" in model.lower():
-            return False
-        if model in {"your_model_here", "changeme"}:
-            return False
-        # Groq keys start with "gsk_"; be lenient but reject obvious stubs.
-        if len(key) < 30:
-            return False
-        return True
 
 
 @lru_cache
