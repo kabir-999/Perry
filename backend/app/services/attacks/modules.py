@@ -495,18 +495,39 @@ _SENSITIVE_PREFIXES = ("sensitive_file", "source_map", "stack_trace")
 def _evidence_runner(prefixes, attack):
     async def runner(plan, ctx: AttackContext):
         matched = [f for f in ctx.passive_findings if f.dedup_key.split("|", 1)[0] in prefixes]
+        # These checks (headers/cookies/CORS/dir-listing/version-disclosure/
+        # sensitive-files/source-maps) only ever ran against the primary
+        # target's own pages during discovery — never against third-party
+        # hosts the browser happened to observe network calls to (Google
+        # Analytics, Facebook Pixel, Firebase, YouTube, etc.). Matching
+        # "any finding anywhere" against every planned test regardless of
+        # host previously stamped VULNERABLE onto those unrelated
+        # third-party endpoints too — a false positive that made it look
+        # like e.g. google-analytics.com itself was misconfigured, when
+        # nothing about it was ever actually checked. Scope each match to
+        # same-host endpoints only (header/cookie/CORS hygiene is normally
+        # server-wide, not per-path, so same-host generalizes fine).
+        matched_by_host: dict[str, list] = {}
+        for f in matched:
+            matched_by_host.setdefault(urlsplit(f.url).netloc.lower(), []).append(f)
         out = []
         for pt in plan:
-            if matched:
-                worst = matched[0]
+            ep = ctx.inventory.endpoint(pt.endpoint_id)
+            host = urlsplit(ep.url).netloc.lower() if ep else ""
+            hits = matched_by_host.get(host, [])
+            if hits:
+                worst = hits[0]
                 out.append(_exec(pt, TestStatus.VULNERABLE, confidence=worst.confidence,
-                                 evidence=f"{len(matched)} issue(s): {worst.title}", finding=None))
+                                 evidence=f"{len(hits)} issue(s): {worst.title}", finding=worst))
+            elif matched:
+                # Other hosts had matches, this one didn't — genuinely
+                # never checked, not "checked and clean".
+                out.append(_exec(pt, TestStatus.NOT_TESTED,
+                                 evidence="This endpoint's host was not part of the passive "
+                                          "discovery checks (different origin) — not tested."))
             else:
                 out.append(_exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                                  evidence="No issues detected in collected responses."))
-        # Attach ALL matched findings to the first execution so nothing is lost.
-        if out and matched:
-            out[0].finding = matched[0]
         return out
     return runner
 
