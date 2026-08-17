@@ -21,6 +21,10 @@
     --ink: #123331;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
   html,
   body,
   #root {
@@ -164,6 +168,47 @@
 
   .lift:hover {
     transform: translateY(-3px);
+  }
+
+  /* Soft, breathing glow around terminal/code panels — cinematic accent
+     without being distracting. */
+  @keyframes glow-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 22px -8px rgba(18, 166, 160, 0.45);
+    }
+    50% {
+      box-shadow: 0 0 34px -6px rgba(18, 166, 160, 0.7);
+    }
+  }
+
+  .glow-teal {
+    animation: glow-pulse 3.4s ease-in-out infinite;
+  }
+
+  /* Terminal-style typing caret, used by TypewriterHeadline. */
+  @keyframes caret-blink {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    50%,
+    95% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+
+  .typing-cursor {
+    display: inline-block;
+    width: 0.5ch;
+    height: 0.85em;
+    margin-left: 0.06em;
+    vertical-align: -0.1em;
+    background: currentColor;
+    animation: caret-blink 1s steps(1) infinite;
   }
 }
 

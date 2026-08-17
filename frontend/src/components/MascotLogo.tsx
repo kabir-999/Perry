@@ -1,13 +1,16 @@
 import perryLogo from "../Perry-Logo_bgremoved.png";
 
 type MascotLogoProps = {
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "nav" | "md" | "lg";
   showWordmark?: boolean;
   className?: string;
 };
 
 const SIZE_CLASS = {
   sm: "h-10 w-24",
+  // A step up from `sm` for the centered marketing-header wordmark, which
+  // has room to breathe since nav links and auth buttons sit either side.
+  nav: "h-12 w-28",
   // Used for every page's top-left header logo (Login, Home, the
   // authenticated Layout nav) — bumped up since it was reading too small
   // there. Scales down a step on phones so it doesn't crowd a narrow header.
