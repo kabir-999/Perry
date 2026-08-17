@@ -60,9 +60,48 @@ try:
 except Exception:  # pragma: no cover - exercised only when not installed
     _PLAYWRIGHT_AVAILABLE = False
 
+
+def _available_memory_mb() -> float | None:
+    """Free + reclaimable memory on this host, in MB — ``None`` when it can't
+    be determined (e.g. running locally on macOS, which has no /proc). A
+    small, memory-constrained container is exactly the situation where
+    Chromium's own footprint (measured: a single real-world page can use
+    several hundred MB) can exceed the *whole container's* limit and get the
+    entire process OOM-killed — every in-flight scan for every user, not
+    just this one. Checking before committing to a browser crawl (and again
+    between pages) turns that into a graceful "stopped early, kept what was
+    already found" instead of a hard crash.
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            info = {}
+            for line in f:
+                key, _, rest = line.partition(":")
+                info[key] = rest.strip()
+        # MemAvailable (kernel's own estimate of usable memory, including
+        # reclaimable cache) is what actually matters, not raw MemFree.
+        raw = info.get("MemAvailable") or info.get("MemFree")
+        if raw is None:
+            return None
+        kb = int(raw.split()[0])
+        return kb / 1024
+    except Exception:
+        return None
+
+
 # --- Interaction engine tuning --------------------------------------------
 _MAX_CLICKS_PER_PAGE = 8
 _MAX_FORMS_PER_PAGE = 4
+
+# --- Memory guard (Render Free-tier 512MB containers) ----------------------
+# Below this, don't even launch Chromium — a single heavy real-world page can
+# use several hundred MB across its renderer/main/gpu/utility processes, and
+# starting it when the container is already this tight risks an OOM-kill of
+# the whole process (every in-flight scan, not just this one).
+_MIN_MEMORY_MB_TO_START = 200
+# Below this mid-crawl, stop opening new pages and return what's been found
+# so far — better a partial browser crawl than a container restart.
+_MIN_MEMORY_MB_TO_CONTINUE = 120
 
 # Elements safe to click: they toggle/expand/paginate, they don't submit.
 _SAFE_CLICK_SELECTOR = ", ".join([
@@ -156,6 +195,16 @@ async def browser_crawl(
         debug_log("BROWSER", msg)
         return result
 
+    available_mb = _available_memory_mb()
+    if available_mb is not None and available_mb < _MIN_MEMORY_MB_TO_START:
+        msg = (
+            f"Available memory too low ({available_mb:.0f}MB < {_MIN_MEMORY_MB_TO_START}MB) - "
+            "browser crawl skipped, falling back to static crawler only."
+        )
+        result.errors.append(msg)
+        debug_log("BROWSER", msg)
+        return result
+
     max_pages = max_pages or settings.BROWSER_CRAWL_MAX_PAGES
     max_depth = max_depth if max_depth is not None else settings.BROWSER_CRAWL_MAX_DEPTH
     nav_timeout_ms = settings.BROWSER_NAV_TIMEOUT_SECONDS * 1000
@@ -244,6 +293,26 @@ async def browser_crawl(
                 if auth_header:
                     await context.set_extra_http_headers(auth_header)
                 page = await context.new_page()
+
+                # We only ever need a page's JS execution, DOM structure, and
+                # the API/XHR/fetch calls it makes for security testing —
+                # never the actual bytes of its images/video/fonts. A
+                # media-heavy real-world site (a video thumbnail grid, web
+                # fonts, etc.) can be tens of MB Chromium would otherwise
+                # download *and* decode into memory per page, dwarfing
+                # anything a small test site costs. Aborting these at the
+                # network layer means Chromium never holds that content at
+                # all — the request is still visible to `_on_request` below
+                # (routing and the request event are independent), so
+                # discovery/inventory awareness is unaffected.
+                async def _block_heavy_assets(route):
+                    if route.request.resource_type in ("image", "media", "font"):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                await page.route("**/*", _block_heavy_assets)
+
                 requests_seen = [0]
 
                 def _on_request(req):
@@ -301,6 +370,15 @@ async def browser_crawl(
                 while frontier and len(result.pages) < max_pages:
                     if requests_seen[0] >= settings.BROWSER_MAX_REQUESTS:
                         debug_log("BROWSER", "Request budget exhausted, stopping crawl.")
+                        break
+                    mid_crawl_mb = _available_memory_mb()
+                    if mid_crawl_mb is not None and mid_crawl_mb < _MIN_MEMORY_MB_TO_CONTINUE:
+                        msg = (
+                            f"Available memory dropped to {mid_crawl_mb:.0f}MB mid-crawl - "
+                            "stopping early, keeping pages already discovered."
+                        )
+                        result.errors.append(msg)
+                        debug_log("BROWSER", msg)
                         break
                     score, url, depth = frontier.pop()
                     page_id = G.dedup_key(url)
