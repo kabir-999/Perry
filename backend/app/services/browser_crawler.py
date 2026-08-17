@@ -37,8 +37,10 @@ returns an empty (never-None) result with an ``.errors`` entry, so callers
 """
 from __future__ import annotations
 
+import asyncio
 import heapq
 import re
+import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 
@@ -90,8 +92,8 @@ def _available_memory_mb() -> float | None:
 
 
 # --- Interaction engine tuning --------------------------------------------
-_MAX_CLICKS_PER_PAGE = 8
-_MAX_FORMS_PER_PAGE = 4
+_MAX_CLICKS_PER_PAGE = 3
+_MAX_FORMS_PER_PAGE = 2
 
 # --- Memory guard (Render Free-tier 512MB containers) ----------------------
 # Below this, don't even launch Chromium — a single heavy real-world page can
@@ -188,6 +190,7 @@ async def browser_crawl(
 ) -> BrowserCrawlResult:
     result = BrowserCrawlResult()
     result.strategy = "bfs"
+    started_at = time.monotonic()
 
     if not _PLAYWRIGHT_AVAILABLE:
         msg = "Playwright not installed - browser crawling skipped, falling back to static crawler only."
@@ -367,57 +370,76 @@ async def browser_crawl(
                 seq[0] += 1
                 frontier.push(0, seq[0], seed_norm, 0)
 
-                while frontier and len(result.pages) < max_pages:
-                    if requests_seen[0] >= settings.BROWSER_MAX_REQUESTS:
-                        debug_log("BROWSER", "Request budget exhausted, stopping crawl.")
-                        break
-                    mid_crawl_mb = _available_memory_mb()
-                    if mid_crawl_mb is not None and mid_crawl_mb < _MIN_MEMORY_MB_TO_CONTINUE:
-                        msg = (
-                            f"Available memory dropped to {mid_crawl_mb:.0f}MB mid-crawl - "
-                            "stopping early, keeping pages already discovered."
-                        )
-                        result.errors.append(msg)
-                        debug_log("BROWSER", msg)
-                        break
-                    score, url, depth = frontier.pop()
-                    page_id = G.dedup_key(url)
-                    current_page_id[0] = page_id
-                    result.max_depth_reached = max(result.max_depth_reached, depth)
-                    try:
-                        debug_log("CRAWLER", f"[{result.strategy}] Navigating to {url} (depth={depth}, score={score})")
-                        resp = await page.goto(url, timeout=nav_timeout_ms, wait_until="domcontentloaded")
+                async def _crawl_loop() -> None:
+                    while frontier and len(result.pages) < max_pages:
+                        if requests_seen[0] >= settings.BROWSER_MAX_REQUESTS:
+                            debug_log("BROWSER", "Request budget exhausted, stopping crawl.")
+                            break
+                        mid_crawl_mb = _available_memory_mb()
+                        if mid_crawl_mb is not None and mid_crawl_mb < _MIN_MEMORY_MB_TO_CONTINUE:
+                            msg = (
+                                f"Available memory dropped to {mid_crawl_mb:.0f}MB mid-crawl - "
+                                "stopping early, keeping pages already discovered."
+                            )
+                            result.errors.append(msg)
+                            debug_log("BROWSER", msg)
+                            break
+                        score, url, depth = frontier.pop()
+                        page_id = G.dedup_key(url)
+                        current_page_id[0] = page_id
+                        result.max_depth_reached = max(result.max_depth_reached, depth)
                         try:
-                            await page.wait_for_load_state("networkidle", timeout=idle_timeout_ms)
-                        except Exception:
-                            pass
-                    except Exception as exc:
-                        result.errors.append(f"Navigation failed for {url}: {exc}")
-                        _clog(result, "error", url=url, depth=depth, detail=str(exc)[:200])
-                        debug_log("BROWSER", f"Navigation failed for {url}: {exc}")
-                        continue
+                            debug_log("CRAWLER", f"[{result.strategy}] Navigating to {url} (depth={depth}, score={score})")
+                            resp = await page.goto(url, timeout=nav_timeout_ms, wait_until="domcontentloaded")
+                            try:
+                                await page.wait_for_load_state("networkidle", timeout=idle_timeout_ms)
+                            except Exception:
+                                pass
+                        except Exception as exc:
+                            result.errors.append(f"Navigation failed for {url}: {exc}")
+                            _clog(result, "error", url=url, depth=depth, detail=str(exc)[:200])
+                            debug_log("BROWSER", f"Navigation failed for {url}: {exc}")
+                            continue
 
-                    _clog(result, "navigate", url=url, depth=depth, score=score,
-                          status=resp.status if resp else None)
-                    result.pages_rendered += 1
-                    result.pages.append(
-                        DiscoveredPath(
-                            url=url,
-                            status_code=resp.status if resp else None,
-                            content_type=(resp.headers.get("content-type", "") if resp else ""),
-                            source="browser_crawler", discovery_method="browser_crawler",
+                        _clog(result, "navigate", url=url, depth=depth, score=score,
+                              status=resp.status if resp else None)
+                        result.pages_rendered += 1
+                        result.pages.append(
+                            DiscoveredPath(
+                                url=url,
+                                status_code=resp.status if resp else None,
+                                content_type=(resp.headers.get("content-type", "") if resp else ""),
+                                source="browser_crawler", discovery_method="browser_crawler",
+                            )
                         )
-                    )
-                    graph.add_node(url, depth=depth, discovery="page", method="GET")
-                    if depth > 0 or url != seed_norm:
-                        result.spa_routes.add(url)
+                        graph.add_node(url, depth=depth, discovery="page", method="GET")
+                        if depth > 0 or url != seed_norm:
+                            result.spa_routes.add(url)
 
-                    # 1) Extract the base DOM first (reliable, before any
-                    #    interaction can navigate away).
-                    await _extract_dom(page, url, depth, scope, result, graph, _enqueue)
-                    # 2) Interact (moderate) to reveal DOM-injected content / XHR;
-                    #    injected links are re-extracted after each safe click.
-                    await _interact(page, url, depth, scope, result, graph, _enqueue, current_page_id)
+                        # 1) Extract the base DOM first (reliable, before any
+                        #    interaction can navigate away).
+                        await _extract_dom(page, url, depth, scope, result, graph, _enqueue)
+                        # 2) Interact (moderate) to reveal DOM-injected content / XHR;
+                        #    injected links are re-extracted after each safe click.
+                        await _interact(page, url, depth, scope, result, graph, _enqueue, current_page_id)
+
+                # Hard ceiling on the whole crawl loop, counted from before
+                # Chromium even launched — a slow/heavy real-world site can
+                # make every individual per-page timeout above "succeed"
+                # (just slowly) and still blow past a reasonable total
+                # latency. Whatever's in `result` when this fires is kept —
+                # a bounded, partial result beats an unbounded wait.
+                elapsed = time.monotonic() - started_at
+                remaining = max(1.0, settings.BROWSER_CRAWL_BUDGET_SECONDS - elapsed)
+                try:
+                    await asyncio.wait_for(_crawl_loop(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    msg = (
+                        f"Browser crawl exceeded its {settings.BROWSER_CRAWL_BUDGET_SECONDS:.0f}s "
+                        "budget - stopping early, keeping pages already discovered."
+                    )
+                    result.errors.append(msg)
+                    debug_log("BROWSER", msg)
 
             finally:
                 await browser.close()
@@ -463,14 +485,14 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             if await el.evaluate("e => !!e.form"):
                 continue
             before = page.url
-            await el.click(timeout=2000, no_wait_after=True)
+            await el.click(timeout=1000, no_wait_after=True)
             clicks += 1
             result.interactions_performed += 1
             _clog(result, "interact", url=page_url, depth=depth, detail="click")
             try:
-                await page.wait_for_load_state("networkidle", timeout=1500)
+                await page.wait_for_load_state("networkidle", timeout=600)
             except Exception:
-                await page.wait_for_timeout(200)
+                await page.wait_for_timeout(150)
             if page.url != before:
                 # The click navigated: record the new route, then restore.
                 enqueue(page.url, depth + 1, G.dedup_key(before), "interaction")
@@ -528,7 +550,7 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             submit = await fh.query_selector("[type='submit'], button:not([type])")
             try:
                 if submit:
-                    await submit.click(timeout=2000, no_wait_after=True)
+                    await submit.click(timeout=1000, no_wait_after=True)
                 else:
                     await fh.evaluate("f => (f.requestSubmit ? f.requestSubmit() : f.submit())")
             except Exception:
@@ -537,9 +559,9 @@ async def _interact(page, page_url, depth, scope, result, graph, enqueue, curren
             result.interactions_performed += 1
             _clog(result, "interact", url=page_url, depth=depth, detail="form-get submit")
             try:
-                await page.wait_for_load_state("networkidle", timeout=2000)
+                await page.wait_for_load_state("networkidle", timeout=800)
             except Exception:
-                await page.wait_for_timeout(300)
+                await page.wait_for_timeout(200)
             if page.url != before:
                 enqueue(page.url, depth + 1, G.dedup_key(page_url), "form-get")
                 if not await _restore(page, page_url):
@@ -553,7 +575,7 @@ async def _restore(page, page_url) -> bool:
     """Return the page to `page_url` after an interaction navigated away, so one
     interaction never corrupts the rest of the crawl. False if it couldn't."""
     try:
-        await page.goto(page_url, timeout=8000, wait_until="domcontentloaded")
+        await page.goto(page_url, timeout=4000, wait_until="domcontentloaded")
         return True
     except Exception:
         return False

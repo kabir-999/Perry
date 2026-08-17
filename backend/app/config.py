@@ -146,14 +146,22 @@ class Settings(BaseSettings):
     # Off by default only in the sense that it degrades gracefully if
     # Chromium isn't installed — when available it always runs, additive
     # to the static crawler, never a replacement for it.
-    BROWSER_CRAWL_MAX_PAGES: int = 15
+    BROWSER_CRAWL_MAX_PAGES: int = 8
     BROWSER_CRAWL_MAX_DEPTH: int = 2
-    BROWSER_NAV_TIMEOUT_SECONDS: float = 12.0
-    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 5.0
+    BROWSER_NAV_TIMEOUT_SECONDS: float = 6.0
+    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 1.5
     # A separate, smaller budget than DEEP_MAX_REQUESTS — browser-driven
     # navigation/clicks can fan out fast, and this is a different cost
     # profile (a real browser tab) than a pooled httpx request.
-    BROWSER_MAX_REQUESTS: int = 150
+    BROWSER_MAX_REQUESTS: int = 100
+    # Hard wall-clock ceiling for the *entire* browser_crawl() call, launch
+    # included. Per-page/per-interaction timeouts above are individually
+    # small, but on a slow/heavy real-world site they add up across many
+    # pages; this is the backstop that guarantees the browser-crawl phase
+    # never gates the whole scan past a predictable, bounded duration. On
+    # timeout, whatever pages/requests were already discovered are kept and
+    # returned (graceful partial result), not thrown away.
+    BROWSER_CRAWL_BUDGET_SECONDS: float = 18.0
 
     # --- Debug mode (Part 18): bracketed-tag trace of what was discovered/
     # tested and why, at logging.DEBUG. Zero cost when off.
