@@ -707,6 +707,21 @@ base URL must be configured explicitly (see below).
    subdomain — add those too if you need CORS to work from previews, not
    just production).
 
+## Deployment (Render + Vercel)
+
+If you prefer Render for the backend, this repo now includes a Render
+Blueprint at [render.yaml](./render.yaml). It runs the backend as a Docker
+web service, keeps the browser crawler in `SCAN_PROFILE=lite`, and wires the
+database connection through Render's Postgres blueprint.
+
+1. Create a new Render Blueprint from `render.yaml`.
+2. Set the frontend root in Vercel to `frontend/`, build with `npm run build`,
+   and set `VITE_API_URL` to your Render backend URL plus `/api`, e.g.
+   `https://your-backend.onrender.com/api`.
+3. Set the backend `FRONTEND_ORIGINS` on Render to your final Vercel URL,
+   e.g. `["https://your-app.vercel.app"]`.
+4. Keep `SCAN_PROFILE=lite` on Render unless you move to a larger plan.
+
 ## Deployment (AWS EC2)
 
 For a single-box AWS deploy that keeps frontend, backend, and PostgreSQL on

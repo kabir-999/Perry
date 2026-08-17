@@ -306,9 +306,19 @@ class ScanManager:
 
             await self._store_deep_result(scan_id, fast, deep)
 
+        except MemoryError as exc:  # pragma: no cover - defensive top-level guard
+            logger.exception("Scan %s ran out of memory", scan_id)
+            await self._fail(
+                scan_id,
+                "The scan ran out of memory on this deployment. "
+                "Use a smaller target, lower scan profile, or a larger backend plan.",
+            )
         except Exception as exc:  # pragma: no cover - defensive top-level guard
             logger.exception("Scan %s failed", scan_id)
-            await self._fail(scan_id, "The scan failed due to an internal error.")
+            detail = f"{type(exc).__name__}: {exc}".strip()
+            if len(detail) > 180:
+                detail = detail[:180].rstrip() + "..."
+            await self._fail(scan_id, f"The scan failed due to an internal error ({detail}).")
 
     # ------------------------------------------------------------- persistence
 

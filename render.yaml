@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: perry-backend
+    runtime: docker
+    plan: free
+    dockerContext: backend
+    dockerfilePath: backend/Dockerfile
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: SCAN_PROFILE
+        value: lite
+      - key: FRONTEND_ORIGINS
+        value: '["https://your-frontend.vercel.app"]'
+      - key: DATABASE_URL
+        fromDatabase:
+          name: perry-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: LOG_ENCRYPTION_KEY
+        generateValue: true
+      - key: GITHUB_TOKEN
+        sync: false
+
+databases:
+  - name: perry-db
+    plan: free
