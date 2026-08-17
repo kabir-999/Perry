@@ -422,7 +422,7 @@ async def run_deep_scan(
         # so the frontend's "DFS" comparison tab has nothing to key off and
         # won't render.
         result.crawl_strategies = {
-            "bfs": _strategy_payload(bfs_result),
+            "bfs": _strategy_payload(browser_result),
         }
 
         cov = compute_coverage(inv, executions)
