@@ -37,6 +37,11 @@ export interface Scan {
   security_checks_completed: number;
   findings_count: number;
   ai_status: string;
+  ai_analyzed: boolean;
+  ai_error: string;
+  ai_summary: string;
+  ai_recommendation: string;
+  risk_factors?: Record<string, unknown>;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -273,6 +278,11 @@ export interface ScanSnapshot {
   security_checks_completed: number;
   findings_count: number;
   ai_status: string;
+  ai_analyzed?: boolean;
+  ai_error?: string;
+  ai_summary?: string;
+  ai_recommendation?: string;
+  risk_factors?: Record<string, unknown>;
   risk_score: number;
   requests_made: number;
   error_message: string;

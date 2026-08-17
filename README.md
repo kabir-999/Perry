@@ -721,6 +721,9 @@ database connection through Render's Postgres blueprint.
 3. Set the backend `FRONTEND_ORIGINS` on Render to your final Vercel URL,
    e.g. `["https://your-app.vercel.app"]`.
 4. Keep `SCAN_PROFILE=lite` on Render unless you move to a larger plan.
+5. Optional: set `GROQ_API_KEY` on Render if you want the richer post-scan
+   backend analysis summary and false-positive review; without it the scan
+   still completes with a deterministic local summary.
 
 ## Deployment (AWS EC2)
 

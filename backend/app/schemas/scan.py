@@ -108,6 +108,11 @@ class ScanRead(BaseModel):
     security_checks_completed: int = 0
     findings_count: int = 0
     ai_status: str = ""
+    ai_analyzed: bool = False
+    ai_error: str = ""
+    ai_summary: str = ""
+    ai_recommendation: str = ""
+    risk_factors_json: str = ""
 
     created_at: datetime
     started_at: Optional[datetime] = None

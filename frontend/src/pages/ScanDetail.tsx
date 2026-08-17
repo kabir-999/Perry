@@ -385,6 +385,10 @@ export default function ScanDetail() {
         <AnomalyOverviewPanel anomaly={snap.anomaly} />
       )}
 
+      {isTerminal && (snap.ai_summary || snap.ai_recommendation || snap.ai_error || snap.ai_analyzed) && (
+        <AnalysisPanel snap={snap} />
+      )}
+
       {/* Attack Coverage — the attack modules and their per-attack rollup.
           Each row shows its anomaly score and expands to its production JSON logs. */}
       {attackRows.length > 0 && (
@@ -934,6 +938,73 @@ function AnomalyOverviewPanel({ anomaly }: { anomaly: NonNullable<ScanSnapshot["
             </div>
           ))}
         </div>
+      </div>
+    </Panel>
+  );
+}
+
+function AnalysisPanel({ snap }: { snap: ScanSnapshot }) {
+  const factors = (snap.risk_factors ?? {}) as Record<string, unknown>;
+  const falsePositives = Array.isArray(factors.false_positive_candidates)
+    ? (factors.false_positive_candidates as Array<{ title?: string; reason?: string; confidence?: string }>)
+    : [];
+  const observations = Array.isArray(factors.backend_observations)
+    ? (factors.backend_observations as string[])
+    : [];
+  const topFindings = Array.isArray(factors.top_findings)
+    ? (factors.top_findings as string[])
+    : [];
+
+  return (
+    <Panel title="Backend Analysis" accent="#0f766e">
+      <div className="space-y-3 text-sm">
+        {snap.ai_summary && <Detail label="Summary" text={snap.ai_summary} />}
+        {snap.ai_recommendation && (
+          <Detail label="Recommendation" text={snap.ai_recommendation} />
+        )}
+        {snap.ai_error && <Detail label="Analysis note" text={snap.ai_error} />}
+
+        {topFindings.length > 0 && (
+          <div>
+            <span className="text-xs font-medium uppercase tracking-wide text-[#948972]">
+              Top findings:{" "}
+            </span>
+            <span className="text-[#4a4032]">{topFindings.join(" • ")}</span>
+          </div>
+        )}
+
+        {observations.length > 0 && (
+          <div>
+            <span className="text-xs font-medium uppercase tracking-wide text-[#948972]">
+              Backend observations:{" "}
+            </span>
+            <span className="text-[#4a4032]">{observations.join(" • ")}</span>
+          </div>
+        )}
+
+        {falsePositives.length > 0 && (
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium uppercase tracking-wide text-[#948972]">
+              Review carefully:
+            </span>
+            <div className="space-y-1.5">
+              {falsePositives.map((item, idx) => (
+                <div
+                  key={`${item.title ?? "candidate"}-${idx}`}
+                  className="rounded-lg border border-[#e3d8c4] bg-[#fcf8f0] px-3 py-2"
+                >
+                  <div className="text-sm font-medium text-[#3a3122]">
+                    {item.title || "Potential false positive"}
+                  </div>
+                  <div className="text-xs text-[#6f6552]">
+                    {item.reason || "Manual review recommended."}
+                    {item.confidence ? ` (${item.confidence})` : ""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </Panel>
   );
@@ -1495,6 +1566,26 @@ function buildReportHtml(
       }${snap.assessment_warning ? ` &nbsp;•&nbsp; ${esc(snap.assessment_warning)}` : ""}</div>`
     : "";
 
+  const analysisSection =
+    snap.ai_summary || snap.ai_recommendation || snap.ai_error
+      ? `
+  <h2>Backend Analysis</h2>
+  ${snap.ai_summary ? `<div class="kv"><b>Summary</b> ${esc(snap.ai_summary)}</div>` : ""}
+  ${snap.ai_recommendation ? `<div class="kv"><b>Recommendation</b> ${esc(snap.ai_recommendation)}</div>` : ""}
+  ${snap.ai_error ? `<div class="kv"><b>Analysis note</b> ${esc(snap.ai_error)}</div>` : ""}
+  ${
+    Array.isArray(snap.risk_factors?.top_findings)
+      ? `<div class="kv"><b>Top findings</b> ${esc((snap.risk_factors.top_findings as string[]).join(" • "))}</div>`
+      : ""
+  }
+  ${
+    Array.isArray(snap.risk_factors?.backend_observations)
+      ? `<div class="kv"><b>Backend observations</b> ${esc((snap.risk_factors.backend_observations as string[]).join(" • "))}</div>`
+      : ""
+  }
+`
+      : "";
+
   return `<!doctype html><html><head><meta charset="utf-8">
 <title>Security Report — ${esc(target)}</title>
 <style>
@@ -1521,6 +1612,7 @@ function buildReportHtml(
   ${confidenceLine}
   <div class="muted">${findings.length} findings &nbsp;•&nbsp; ${snap.urls_discovered} URLs &nbsp;•&nbsp; ${snap.apis_discovered} APIs &nbsp;•&nbsp; ${snap.parameters_discovered} params &nbsp;•&nbsp; ${snap.subdomains_discovered} subdomains &nbsp;•&nbsp; ${snap.requests_made} requests</div>
 
+  ${analysisSection}
   ${coverageRows ? `<h2>Attack Coverage</h2><table class="tests">${coverageRows}</table>` : ""}
 
   <h2>Findings (${findings.length})</h2>

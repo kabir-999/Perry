@@ -32,6 +32,7 @@ from app.schemas.scan import ScanCreate
 from app.services import deep_scan as deep_scan_module
 from app.services.deep_scan import DeepScanResult, run_deep_scan
 from app.services.fast_scanner import FastScanResult, run_fast_scan
+from app.services.scan_analysis import analyze_scan
 from app.services.report_generator import build_report, render_report_json
 from app.services.scan_broker import scan_broker
 from app.services.scope import TargetScope, build_scope
@@ -83,6 +84,11 @@ def scan_snapshot(scan: Scan) -> dict:
         "security_checks_completed": scan.security_checks_completed,
         "findings_count": scan.findings_count,
         "ai_status": scan.ai_status,
+        "ai_analyzed": scan.ai_analyzed,
+        "ai_error": scan.ai_error,
+        "ai_summary": scan.ai_summary,
+        "ai_recommendation": scan.ai_recommendation,
+        "risk_factors": _load(scan.risk_factors_json, {}),
         "risk_score": scan.risk_score,
         "requests_made": scan.requests_made,
         "error_message": scan.error_message,
@@ -486,25 +492,25 @@ class ScanManager:
             scan.crawl_strategies_json = json.dumps(deep.crawl_strategies or {})
             scan.requests_made = deep.requests_made
             scan.deep_progress = 100
-            scan.status = ScanStatus.COMPLETED.value
-            scan.completed_at = datetime.now(timezone.utc)
+            scan.status = ScanStatus.AI_ANALYSIS.value
+            scan.ai_status = "Generating backend analysis..."
             db.add(
                 ScanEvent(
                     scan_id=scan.id,
-                    event_type="scan_completed",
-                    message=(f"Scan complete: {len(deep.findings)} findings; "
-                             f"risk {deep.final_risk} ({deep.overall_risk}/100), "
-                             f"confidence {deep.assessment_confidence}, "
-                             f"coverage {deep.assessment_coverage}%."),
+                    event_type="scan_analysis",
+                    message="Post-scan analysis started.",
                 )
             )
-            await db.flush()
+            await db.commit()
+            await db.refresh(scan)
+            self._publish_snapshot(scan)
 
             # Report artifact (JSON inline).
             await db.refresh(scan, ["target"])
             findings_result = await db.execute(
                 select(Finding).where(Finding.scan_id == scan.id)
             )
+            findings_list = list(findings_result.scalars().all())
 
             # Remediation verification: compare against the same target's
             # two most recent prior completed scans (if any) to classify
@@ -528,10 +534,29 @@ class ScanManager:
                         select(Finding.fingerprint).where(Finding.scan_id == prior_scans[1])
                     )).scalars().all())
 
+            analysis = await analyze_scan(scan, findings_list)
+            scan.ai_analyzed = analysis.ai_analyzed
+            scan.ai_error = analysis.ai_error
+            scan.ai_summary = analysis.ai_summary
+            scan.ai_recommendation = analysis.ai_recommendation
+            scan.risk_factors_json = json.dumps(analysis.risk_factors or {})
+            scan.ai_status = "Analysis complete" if analysis.ai_analyzed else "Analysis unavailable"
+            scan.status = ScanStatus.COMPLETED.value
+            scan.completed_at = datetime.now(timezone.utc)
             report = build_report(
-                scan, list(findings_result.scalars().all()),
+                scan, findings_list,
                 prior_fingerprints=prior_fingerprints,
                 prior_prior_fingerprints=prior_prior_fingerprints,
+            )
+            db.add(
+                ScanEvent(
+                    scan_id=scan.id,
+                    event_type="scan_completed",
+                    message=(f"Scan complete: {len(deep.findings)} findings; "
+                             f"risk {deep.final_risk} ({deep.overall_risk}/100), "
+                             f"confidence {deep.assessment_confidence}, "
+                             f"coverage {deep.assessment_coverage}%."),
+                )
             )
             db.add(
                 Report(

@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     # auto-discovering the site's repository (60/hr anonymous vs 5000/hr).
     # Never sent to the frontend; a read-only/no-scope token is enough.
     GITHUB_TOKEN: Optional[str] = None
+    # Optional Groq/OpenAI-compatible endpoint for the post-scan analysis
+    # stage. When unset, the backend falls back to a deterministic summary so
+    # the product still works on small deployments.
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_TIMEOUT_SECONDS: float = 20.0
     REPO_MIN_CONFIDENCE: float = 0.6
     REPO_CLONE_TIMEOUT_SECONDS: float = 120.0
     REPO_MAX_FILES: int = 500

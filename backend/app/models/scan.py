@@ -85,6 +85,11 @@ class Scan(Base):
 
     # Live status line for the deep-scan view.
     ai_status: Mapped[str] = mapped_column(String(128), default="")
+    ai_analyzed: Mapped[bool] = mapped_column(default=False)
+    ai_error: Mapped[str] = mapped_column(Text, default="")
+    ai_summary: Mapped[str] = mapped_column(Text, default="")
+    ai_recommendation: Mapped[str] = mapped_column(Text, default="")
+    risk_factors_json: Mapped[str] = mapped_column(Text, default="")
     # Which deep-scan check groups have finished (JSON list of labels).
     checks_done_json: Mapped[str] = mapped_column(Text, default="")
 
