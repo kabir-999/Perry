@@ -146,7 +146,7 @@ class Fetcher:
         request_budget: int,
         max_response_bytes: int,
         rate_limit_per_second: float = 0,
-        max_cache_bytes: int = 25_000_000,
+        max_cache_bytes: int = 60_000_000,
     ) -> None:
         self._client = client
         self._sem = asyncio.Semaphore(max(1, concurrency))

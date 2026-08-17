@@ -119,7 +119,12 @@ class Settings(BaseSettings):
     REDIRECT_MAX_DEPTH: int = 5
 
     # --- Stage 2: Deep Scan ---
-    DEEP_CONCURRENCY: int = 24
+    # Deployed on a dedicated 1GB EC2 instance now (vs. Render's shared
+    # 512MB free tier) — Postgres also moved off-box to RDS, so this
+    # process no longer competes with it for memory either. Raised
+    # proportionally, not unboundedly; the memory guard in
+    # browser_crawler.py still protects against any single heavy site.
+    DEEP_CONCURRENCY: int = 32
     # Request budget must cover the whole attack surface: with 19 attack
     # modules each probing every eligible parameter, a modest site is easily
     # 1,000-2,000 requests. Set too low (the old 300) it starved later attacks
@@ -139,21 +144,21 @@ class Settings(BaseSettings):
     SUBDOMAIN_ASSESS_LIMIT: int = 5
 
     # Connection pool sizing for the shared httpx.AsyncClient.
-    HTTP_MAX_CONNECTIONS: int = 48
-    HTTP_MAX_KEEPALIVE: int = 24
+    HTTP_MAX_CONNECTIONS: int = 64
+    HTTP_MAX_KEEPALIVE: int = 32
 
     # --- Browser-based crawling (JS/SPA discovery) ---
     # Off by default only in the sense that it degrades gracefully if
     # Chromium isn't installed — when available it always runs, additive
     # to the static crawler, never a replacement for it.
-    BROWSER_CRAWL_MAX_PAGES: int = 8
+    BROWSER_CRAWL_MAX_PAGES: int = 12
     BROWSER_CRAWL_MAX_DEPTH: int = 2
-    BROWSER_NAV_TIMEOUT_SECONDS: float = 6.0
-    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 1.5
+    BROWSER_NAV_TIMEOUT_SECONDS: float = 8.0
+    BROWSER_NETWORK_IDLE_TIMEOUT_SECONDS: float = 2.5
     # A separate, smaller budget than DEEP_MAX_REQUESTS — browser-driven
     # navigation/clicks can fan out fast, and this is a different cost
     # profile (a real browser tab) than a pooled httpx request.
-    BROWSER_MAX_REQUESTS: int = 100
+    BROWSER_MAX_REQUESTS: int = 160
     # Hard wall-clock ceiling for the *entire* browser_crawl() call, launch
     # included. Per-page/per-interaction timeouts above are individually
     # small, but on a slow/heavy real-world site they add up across many
@@ -161,7 +166,7 @@ class Settings(BaseSettings):
     # never gates the whole scan past a predictable, bounded duration. On
     # timeout, whatever pages/requests were already discovered are kept and
     # returned (graceful partial result), not thrown away.
-    BROWSER_CRAWL_BUDGET_SECONDS: float = 18.0
+    BROWSER_CRAWL_BUDGET_SECONDS: float = 30.0
 
     # --- Debug mode (Part 18): bracketed-tag trace of what was discovered/
     # tested and why, at logging.DEBUG. Zero cost when off.
