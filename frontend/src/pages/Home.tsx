@@ -4,6 +4,13 @@ import Footer from "../components/Footer";
 import MarketingHeader from "../components/MarketingHeader";
 import PerryLogoMark from "../components/PerryLogoMark";
 import Reveal from "../components/Reveal";
+import kabirPhoto from "../Team/Kabir.jpeg";
+import aayushPhoto from "../Team/aayush.jpeg";
+import aagnyaPhoto from "../Team/Aagnya.jpeg";
+import chhaviPhoto from "../Team/Chhavi.jpeg";
+import chaahatPhoto from "../Team/chaahat.jpeg";
+import dakshPhoto from "../Team/Daksh.jpeg";
+import dakshAvatar from "../Team/Daksh_avatar.jpeg";
 import TypewriterHeadline from "../components/TypewriterHeadline";
 
 const HEADLINE_LINES = ["Find vulnerabilities", "before attackers do"];
@@ -67,14 +74,27 @@ const PRINCIPLES = [
   },
 ];
 
-// Placeholder photos — swap in real headshots when available.
-const TEAM = [
-  "Kabir Mathur",
-  "Aayush Chaudhari",
-  "Aagnya Mistry",
-  "Chhavi Rathod",
-  "Chaahat Singh",
-  "Daksh Goyal",
+// `zoom`/`position` crop the full photo into the small circular thumbnail
+// via CSS (transform-origin pinned near the face) — approved as-is for
+// Kabir/Aayush/Chaahat, left untouched. `avatar` is a pre-cropped square
+// file, used only for Daksh (his photo's aspect ratio made the CSS
+// approach cut off part of his face). Aagnya and Chhavi use their photo
+// directly with no crop at all — plain object-cover already frames them
+// well. `photo` (the original, uncropped picture) is what the click
+// preview shows full-size.
+const TEAM: {
+  name: string;
+  photo?: string;
+  avatar?: string;
+  zoom?: number;
+  position?: string;
+}[] = [
+  { name: "Kabir Mathur", photo: kabirPhoto, zoom: 1.35, position: "50% 24%" },
+  { name: "Aayush Chaudhari", photo: aayushPhoto, zoom: 1.6, position: "50% 28%" },
+  { name: "Aagnya Mistry", photo: aagnyaPhoto },
+  { name: "Chhavi Rathod", photo: chhaviPhoto },
+  { name: "Chaahat Singh", photo: chaahatPhoto },
+  { name: "Daksh Goyal", photo: dakshPhoto, avatar: dakshAvatar },
 ];
 
 export default function Home() {
@@ -224,19 +244,41 @@ export default function Home() {
               The team
             </p>
             <div className="mt-4 grid gap-4 sm:grid-cols-3">
-              {TEAM.map((name) => (
-                <div
-                  key={name}
-                  className="rounded-lg border border-[#d5e7e2] bg-white/70 p-4 text-center"
-                >
-                  <div className="mx-auto grid h-16 w-16 place-items-center rounded-full border border-dashed border-[#8fbab1] bg-[#dff0ec] text-[9px] font-bold uppercase tracking-wide text-[#08756f]">
-                    Photo
+              {TEAM.map((member) => {
+                const { name, photo, avatar, zoom, position } = member;
+                const thumb = avatar ?? photo;
+                return (
+                  <div
+                    key={name}
+                    className="rounded-lg border border-[#d5e7e2] bg-white/70 p-4 text-center"
+                  >
+                    {thumb ? (
+                      <span className="mx-auto grid h-16 w-16 overflow-hidden rounded-full border border-[#8fbab1]">
+                        <img
+                          src={thumb}
+                          alt={name}
+                          className="h-full w-full object-cover"
+                          style={
+                            avatar
+                              ? undefined
+                              : {
+                                  objectPosition: position ?? "50% 50%",
+                                  transform: zoom ? `scale(${zoom})` : undefined,
+                                }
+                          }
+                        />
+                      </span>
+                    ) : (
+                      <div className="mx-auto grid h-16 w-16 place-items-center rounded-full border border-dashed border-[#8fbab1] bg-[#dff0ec] text-[9px] font-bold uppercase tracking-wide text-[#08756f]">
+                        Photo
+                      </div>
+                    )}
+                    <p className="mt-3 text-sm font-bold text-[#123331]">
+                      {name}
+                    </p>
                   </div>
-                  <p className="mt-3 text-sm font-bold text-[#123331]">
-                    {name}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Reveal>
         </div>

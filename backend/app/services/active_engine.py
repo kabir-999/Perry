@@ -575,36 +575,68 @@ async def _hpp_test(
         return []
 
     a, b = analyze(single), analyze(dup)
-    # Only flag when the duplicate meaningfully changes behaviour AND one of
-    # the injected values is reflected (a security-relevant signal).
+    # A behavioural difference plus reflection is suggestive — many sites
+    # harmlessly render whichever value a framework picks last/first for a
+    # duplicated parameter, which is not itself a security issue. Only a
+    # status-code transition suggesting an actual security control was
+    # bypassed (the single value was rejected but the duplicate got through)
+    # is treated as confirmed, attack-specific evidence of something
+    # security-relevant; a bare diff + reflection is real but unproven —
+    # reported as POTENTIAL (INCONCLUSIVE), never VULNERABLE, per the
+    # "never manufacture certainty" rule.
     reflects_b = "WFB" in dup.text
-    hit = meaningfully_different(a, b) and reflects_b
+    behavior_diff = meaningfully_different(a, b)
+    hit = behavior_diff and reflects_b
+    if not hit:
+        if recorder is not None:
+            recorder.record(
+                dedup_prefix="hpp", target=target,
+                payload=f"{target.name}=WFA&{target.name}=WFB", response=dup, evidence=None)
+        return []
+
+    security_control_bypassed = (
+        single.status_code in (401, 403)
+        and dup.ok
+        and dup.status_code not in (401, 403)
+    )
+    if security_control_bypassed:
+        confidence = "confirmed"
+        severity = "medium"
+        evidence = (
+            f"Duplicate '{target.name}' bypassed the HTTP {single.status_code} that "
+            "rejected the single value — the second occurrence reached a "
+            "security control the first was blocked by."
+        )
+    else:
+        confidence = "potential"
+        severity = "low"
+        evidence = (
+            f"Duplicate '{target.name}' changed the response and the second "
+            "value was reflected, but no security-sensitive impact "
+            "(validation/authorization/security-control bypass) was demonstrated."
+        )
     if recorder is not None:
         recorder.record(
             dedup_prefix="hpp", target=target,
-            payload=f"{target.name}=WFA&{target.name}=WFB", response=dup,
-            evidence=("duplicate changed response; second value reflected" if hit else None))
-    if hit:
-        return [
-            FindingCandidate(
-                title="HTTP parameter pollution",
-                category="input_validation",
-                severity="low",
-                confidence="potential",
-                url=target.url,
-                parameter=target.name,
-                evidence=f"Duplicate '{target.name}' changed the response; "
-                "second value reflected.",
-                request_summary=f"GET {dup_url}",
-                response_summary=f"single HTTP {a.status_code} vs dup HTTP {b.status_code}",
-                description="Sending the parameter twice produced a different, "
-                "value-dependent response.",
-                impact="",
-                remediation="",
-                dedup_key=f"hpp|{parts.path}|{target.name}",
-            )
-        ]
-    return []
+            payload=f"{target.name}=WFA&{target.name}=WFB", response=dup, evidence=evidence)
+    return [
+        FindingCandidate(
+            title="HTTP parameter pollution",
+            category="input_validation",
+            severity=severity,
+            confidence=confidence,
+            url=target.url,
+            parameter=target.name,
+            evidence=evidence,
+            request_summary=f"GET {dup_url}",
+            response_summary=f"single HTTP {a.status_code} vs dup HTTP {b.status_code}",
+            description="Sending the parameter twice produced a different, "
+            "value-dependent response.",
+            impact="",
+            remediation="",
+            dedup_key=f"hpp|{parts.path}|{target.name}",
+        )
+    ]
 
 
 async def check_dom_xss(target: ParamTarget) -> list[FindingCandidate]:

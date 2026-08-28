@@ -323,7 +323,30 @@ async def check_csrf(
         data=data or {"email": "attacker@evil.example"},
         use_cache=False,
     )
-    accepted = res.ok and res.status_code in (200, 201, 204, 302)
+    # A bare "non-error status" is a weak, false-positive-prone signal on
+    # its own: many SPA/CDN edges (e.g. Netflix) return HTTP 200 with the
+    # same page shell for *any* method on *any* route, regardless of
+    # whether real backend logic ran — that is not evidence the POST did
+    # anything, let alone something state-changing. 201/204 (created/no-
+    # content) and a 302 whose Location differs from the request URL are
+    # strong "this actually did something" signals on their own; a bare
+    # 200 needs corroboration — a same-URL GET baseline distinguishes
+    # "the server actually processed this and returned something distinct"
+    # from "it just re-served the same page regardless of method."
+    redirected_elsewhere = (
+        res.status_code == 302
+        and res.header("location")
+        and res.header("location").rstrip("/") != url.rstrip("/")
+    )
+    accepted = res.ok and (res.status_code in (201, 204) or redirected_elsewhere)
+    if not accepted and res.ok and res.status_code == 200:
+        baseline = await fetcher.fetch(url, method="GET", use_cache=True)
+        indistinguishable_from_baseline = (
+            baseline.ok
+            and baseline.status_code == res.status_code
+            and abs(len(baseline.text) - len(res.text)) < max(50, 0.05 * max(len(baseline.text), 1))
+        )
+        accepted = not indistinguishable_from_baseline
     set_cookie = (res.headers.get("set-cookie") or "").lower()
     samesite_absent = ("samesite" not in set_cookie)
     if accepted and samesite_absent:

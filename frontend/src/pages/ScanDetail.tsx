@@ -56,6 +56,7 @@ const ATTACK_STATUS_STYLE: Record<
   { bg: string; fg: string; label: string }
 > = {
   VULNERABLE: { bg: "#fbe7e7", fg: "#b91c1c", label: "Vulnerable" },
+  HARDENING: { bg: "#e5eff7", fg: "#1f6f9c", label: "Security hardening" },
   NOT_VULNERABLE: { bg: "#e7f4ec", fg: "#0f7a52", label: "Not vulnerable" },
   NOT_TESTED: { bg: "#fdf3e3", fg: "#b45309", label: "Not tested" },
   INCONCLUSIVE: { bg: "#f1ecfb", fg: "#6d4fb8", label: "Inconclusive" },
@@ -1549,6 +1550,7 @@ function buildReportHtml(
     INCONCLUSIVE: '<span style="color:#6d4fb8">Inconclusive</span>',
     NOT_VULNERABLE: '<span style="color:#0f7a52">✓ Not vulnerable</span>',
     VULNERABLE: '<span style="color:#b91c1c;font-weight:700">Vulnerable</span>',
+    HARDENING: '<span style="color:#1f6f9c;font-weight:600">Security hardening</span>',
   };
 
   const coverageRows = Object.values(snap.attack_coverage ?? {})

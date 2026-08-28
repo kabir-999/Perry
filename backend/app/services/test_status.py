@@ -24,6 +24,14 @@ class TestStatus:
     # This test class does not apply to this target at all (e.g. no
     # authentication system exists to test authorization against).
     NOT_APPLICABLE = "NOT_APPLICABLE"
+    # A confirmed, real gap — but a hardening/hygiene one (e.g. a missing
+    # security header, a cookie without SameSite), not an exploit. Deliberately
+    # distinct from VULNERABLE: conflating "CSP header absent" with "SQL
+    # injection confirmed" under the same status makes the report read as if
+    # both carry the same real-world risk, which they don't. Also distinct
+    # from NOT_VULNERABLE — this *is* a real, confirmed observation, not
+    # "nothing found."
+    HARDENING = "HARDENING"
 
 
 ALL_STATUSES = (
@@ -32,4 +40,5 @@ ALL_STATUSES = (
     TestStatus.NOT_TESTED,
     TestStatus.INCONCLUSIVE,
     TestStatus.NOT_APPLICABLE,
+    TestStatus.HARDENING,
 )

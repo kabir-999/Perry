@@ -64,6 +64,14 @@ class Settings(BaseSettings):
             return "postgresql+asyncpg://" + v[len("postgresql://") :]
         return v
 
+    # Express-configuration Aurora Serverless clusters (the AWS Free Tier
+    # path) don't support a static password at all — only short-lived IAM
+    # auth tokens. When true, DATABASE_URL's password (if any) is ignored;
+    # database.py generates and refreshes a real token instead. AWS_REGION
+    # must match the cluster's region for token signing to succeed.
+    DATABASE_IAM_AUTH: bool = False
+    AWS_REGION: str = "eu-north-1"
+
     # --- Authentication ---
     # Override in .env for anything other than local development: changing it
     # invalidates every issued token.

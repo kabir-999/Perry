@@ -6,8 +6,15 @@ URL = "https://example.com/profile/change-email"
 
 
 async def test_csrf_missing_token():
-    """State-changing POST accepted cross-site, session cookie has no SameSite."""
+    """State-changing POST accepted cross-site, session cookie has no SameSite.
+
+    The GET baseline returns the (much longer) profile page, distinct from
+    the POST's short confirmation body — real evidence the POST was
+    actually processed, not just a page re-serve regardless of method."""
     def responder(url, **kwargs):
+        if kwargs.get("method") == "GET":
+            return ok_result(url, status_code=200,
+                             text="<html>" + "change email form " * 50 + "</html>")
         return ok_result(url, status_code=200, text="email updated",
                          headers={"set-cookie": "sid=abc; Path=/"})
     findings = await check_csrf(FakeFetcher(responder), URL, method="POST")

@@ -51,6 +51,7 @@ export interface Scan {
  *  as a whole. */
 export type AttackStatus =
   | "VULNERABLE"
+  | "HARDENING"
   | "NOT_VULNERABLE"
   | "NOT_TESTED"
   | "INCONCLUSIVE"
@@ -262,6 +263,7 @@ export interface AttackCoverageEntry {
   inconclusive: number;
   vulnerable: number;
   not_vulnerable: number;
+  hardening: number;
 }
 
 /** Live snapshot streamed over SSE (and returned by GET /scans/:id/live). */

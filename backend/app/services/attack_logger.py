@@ -48,6 +48,9 @@ ALL_LEVELS = (
 # the log is a faithful, machine-readable projection of the test matrix.
 _STATUS_LEVEL: dict[str, str] = {
     TestStatus.VULNERABLE: LEVEL_ALERT,
+    # A real, confirmed gap — worth surfacing above INFO — but not an
+    # exploit, so not the same ALERT level as a confirmed vulnerability.
+    TestStatus.HARDENING: LEVEL_WARNING,
     TestStatus.NOT_VULNERABLE: LEVEL_SUCCESS,
     TestStatus.NOT_TESTED: LEVEL_WARNING,
     TestStatus.INCONCLUSIVE: LEVEL_WARNING,
@@ -55,6 +58,7 @@ _STATUS_LEVEL: dict[str, str] = {
 }
 _STATUS_EVENT: dict[str, str] = {
     TestStatus.VULNERABLE: "vulnerability_detected",
+    TestStatus.HARDENING: "hardening_gap_detected",
     TestStatus.NOT_VULNERABLE: "test_passed",
     TestStatus.NOT_TESTED: "test_skipped",
     TestStatus.INCONCLUSIVE: "test_inconclusive",

@@ -18,7 +18,7 @@ from app.services.attacks import catalog as C
 from app.services.inventory import AttackSurfaceInventory
 from app.services.test_status import TestStatus
 
-_EXECUTED = {TestStatus.VULNERABLE, TestStatus.NOT_VULNERABLE}
+_EXECUTED = {TestStatus.VULNERABLE, TestStatus.NOT_VULNERABLE, TestStatus.HARDENING}
 _NOT_EXECUTED = {TestStatus.NOT_TESTED, TestStatus.NOT_APPLICABLE}
 
 
@@ -61,12 +61,15 @@ def per_attack_coverage(plan: list, executions: list) -> dict:
         ex = [e for e in executions if e.attack == attack]
         vulnerable = sum(1 for e in ex if e.status == TestStatus.VULNERABLE)
         not_vuln = sum(1 for e in ex if e.status == TestStatus.NOT_VULNERABLE)
+        hardening = sum(1 for e in ex if e.status == TestStatus.HARDENING)
         inconclusive = sum(1 for e in ex if e.status == TestStatus.INCONCLUSIVE)
         not_applicable = sum(1 for e in ex if e.status == TestStatus.NOT_APPLICABLE)
         not_tested = sum(1 for e in ex if e.status == TestStatus.NOT_TESTED)
-        tested = vulnerable + not_vuln
+        tested = vulnerable + not_vuln + hardening
         if vulnerable:
             status = TestStatus.VULNERABLE
+        elif hardening:
+            status = TestStatus.HARDENING
         elif tested:
             status = TestStatus.NOT_VULNERABLE
         elif inconclusive:
@@ -87,6 +90,7 @@ def per_attack_coverage(plan: list, executions: list) -> dict:
             "inconclusive": inconclusive,
             "vulnerable": vulnerable,
             "not_vulnerable": not_vuln,
+            "hardening": hardening,
         }
     return out
 

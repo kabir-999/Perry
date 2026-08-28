@@ -6,7 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
-from app.database import Base
+from app.database import Base, attach_iam_auth, iam_auth_engine_kwargs
 
 # Import models so they register on Base.metadata before autogenerate runs.
 import app.models  # noqa: F401
@@ -22,7 +22,13 @@ _ASYNC_DRIVERS = ("+asyncpg", "+aiosqlite", "+asyncmy", "+aiomysql", "+psycopg_a
 
 def _normalize_url(url: str) -> str:
     if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+        # IAM-authenticated Aurora connections are wired up (attach_iam_auth)
+        # for the asyncpg dialect specifically — forcing the async path here
+        # too, rather than the default sync psycopg rewrite, keeps both
+        # drivers from ever diverging on how the IAM token/SSL connect args
+        # get applied.
+        driver = "postgresql+asyncpg://" if settings.DATABASE_IAM_AUTH else "postgresql+psycopg://"
+        return url.replace("postgresql://", driver, 1)
     return url
 
 
@@ -58,11 +64,17 @@ def _do_run_migrations(connection) -> None:
 
 
 async def _run_migrations_async() -> None:
+    # Alembic builds its own engine straight from DATABASE_URL rather than
+    # importing app.database's — without also wiring IAM auth here,
+    # migrations against an express-configuration Aurora cluster would try
+    # to connect with no password and fail exactly like the app would.
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        **iam_auth_engine_kwargs(),
     )
+    attach_iam_auth(connectable, config.get_main_option("sqlalchemy.url"))
     async with connectable.connect() as connection:
         await connection.run_sync(_do_run_migrations)
     await connectable.dispose()

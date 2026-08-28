@@ -22,6 +22,13 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _NUM_RE = re.compile(r"\d+")
 
+# Word-shingle size for the Jaccard body-dissimilarity metric used throughout
+# baseline-vs-fuzz comparison (anomaly_engine.probe_anomaly). Fixed and
+# applied identically to every baseline and every fuzz response — never
+# changed per-attack or based on how "vulnerable" a response looks, so the
+# metric stays comparable and auditable across the whole scan.
+SHINGLE_SIZE = 3
+
 
 def _visible_text(html: str) -> str:
     text = _TAG_RE.sub(" ", html)
@@ -29,8 +36,12 @@ def _visible_text(html: str) -> str:
     return text.strip()
 
 
-def _shingles(text: str, size: int = 3) -> set[int]:
-    """Word-trigram hash set, for Jaccard similarity between two bodies."""
+def _shingles(text: str, size: int = SHINGLE_SIZE) -> set[int]:
+    """Word k-shingle hash set (k=SHINGLE_SIZE), for Jaccard similarity
+    between two bodies. Same preprocessing for every response, baseline or
+    fuzz alike: lowercase, whitespace-split, k-gram over words — never
+    attack-specific, never dependent on whether the response looks
+    "vulnerable"."""
     words = text.lower().split()
     if len(words) < size:
         return {hash(text.lower())} if text else set()
@@ -40,6 +51,9 @@ def _shingles(text: str, size: int = 3) -> set[int]:
 
 
 def jaccard(a: set[int], b: set[int]) -> float:
+    """J(A,B) = |A∩B| / |A∪B|, with the two degenerate cases defined
+    explicitly: both empty -> 1.0 (no body content on either side, so no
+    body difference); exactly one empty -> 0.0 (all shingles differ)."""
     if not a and not b:
         return 1.0
     if not a or not b:
@@ -47,6 +61,23 @@ def jaccard(a: set[int], b: set[int]) -> float:
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
+
+
+def jaccard_detail(a: set[int], b: set[int]) -> dict:
+    """Full audit trail for one Jaccard comparison — every intermediate
+    count plus the derived similarity/dissimilarity, so the metric is
+    checkable rather than a black-box number."""
+    inter = len(a & b)
+    union = len(a | b)
+    sim = jaccard(a, b)
+    return {
+        "baseline_shingle_count": len(a),
+        "fuzz_shingle_count": len(b),
+        "intersection": inter,
+        "union": union,
+        "jaccard": round(sim, 6),
+        "body_dissimilarity": round(1.0 - sim, 6),
+    }
 
 
 @dataclass

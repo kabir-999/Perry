@@ -212,9 +212,9 @@ async def run_sql_injection(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.SQL_INJECTION, ep, pm, "SQL Injection", "high", ev, payload, base, test,
                          f"sqli|{ep.normalized_route}|{pm.location}:{pm.name}")
-            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            anom, anom_factors = anomaly.probe_anomaly(base, test, signal_matched=True)
             return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
-                         finding=f, anomaly=anom)
+                         finding=f, anomaly=anom, anomaly_factors=anom_factors)
         # No error signature — try boolean-differential (blind) SQLi on query
         # parameters: a stronger, behavioural signal than an error string alone.
         if pm.location == "query" and not _budget_gone(ctx):
@@ -292,9 +292,9 @@ async def run_xss(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.XSS, ep, pm, "Reflected XSS", "high", ev, payload, base, test,
                          f"reflected_xss|{ep.normalized_route}|{pm.location}:{pm.name}")
-            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            anom, anom_factors = anomaly.probe_anomaly(base, test, signal_matched=True)
             return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
-                         finding=f, anomaly=anom)
+                         finding=f, anomaly=anom, anomaly_factors=anom_factors)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="Marker not reflected in an executable context.")
 
@@ -328,9 +328,9 @@ async def run_path_traversal(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.PATH_TRAVERSAL, ep, pm, "Path Traversal", "high", ev, payload, base, test,
                          f"path_traversal|{ep.normalized_route}|{pm.location}:{pm.name}")
-            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            anom, anom_factors = anomaly.probe_anomaly(base, test, signal_matched=True)
             return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
-                         finding=f, anomaly=anom)
+                         finding=f, anomaly=anom, anomaly_factors=anom_factors)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="No unintended file contents returned.")
 
@@ -377,11 +377,17 @@ async def run_hpp(plan, ctx: AttackContext):
         if not findings and (ctx.fetcher.requests_made == before or _budget_gone(ctx)):
             return _exec(pt, TestStatus.NOT_TESTED, evidence="request budget exhausted; parameter not probed")
         if findings:
-            # A response difference alone is OBSERVATION/HARDENING, not a
-            # vulnerability, unless a security consequence is shown — the
-            # underlying check already gates on reflection, so keep it low.
-            return _exec(pt, TestStatus.VULNERABLE, confidence="potential",
-                         evidence=findings[0].evidence, finding=findings[0])
+            f = findings[0]
+            # _hpp_test only returns confidence="confirmed" when it observed
+            # an actual security-control bypass (a status transition, not
+            # just a response diff) — that's the one case with real,
+            # attack-specific evidence. Anything weaker is a real but
+            # unproven observation: POTENTIAL, never VULNERABLE.
+            if f.confidence == "confirmed":
+                return _exec(pt, TestStatus.VULNERABLE, confidence="confirmed",
+                             evidence=f.evidence, finding=f)
+            return _exec(pt, TestStatus.INCONCLUSIVE, confidence="potential",
+                         evidence=f.evidence, finding=f)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="Duplicate parameter did not change behaviour.")
 
@@ -490,9 +496,16 @@ async def run_auth(plan, ctx: AttackContext):
 
 _MISCONFIG_PREFIXES = ("security_headers", "insecure_cookie", "cors", "dir_listing", "version_disclosure")
 _SENSITIVE_PREFIXES = ("sensitive_file", "source_map", "stack_trace")
+# A missing header or a cookie attribute is a real, confirmed gap — but a
+# hardening/hygiene one, not an exploit. Reporting it as VULNERABLE puts it
+# in the same bucket as e.g. an exposed directory listing or a permissive
+# CORS policy (real, demonstrated exposure of something), which overstates
+# its risk. CORS/dir-listing/version-disclosure stay VULNERABLE-eligible —
+# those are actual observed exposure, not just absent hardening.
+_HARDENING_PREFIXES = frozenset({"security_headers", "insecure_cookie"})
 
 
-def _evidence_runner(prefixes, attack):
+def _evidence_runner(prefixes, attack, hardening_prefixes: frozenset = frozenset()):
     async def runner(plan, ctx: AttackContext):
         matched = [f for f in ctx.passive_findings if f.dedup_key.split("|", 1)[0] in prefixes]
         # These checks (headers/cookies/CORS/dir-listing/version-disclosure/
@@ -507,18 +520,33 @@ def _evidence_runner(prefixes, attack):
         # nothing about it was ever actually checked. Scope each match to
         # same-host endpoints only (header/cookie/CORS hygiene is normally
         # server-wide, not per-path, so same-host generalizes fine).
-        matched_by_host: dict[str, list] = {}
+        # Passive checks run once per crawled page, so the same underlying
+        # issue (e.g. "missing these 2 headers") produces one near-identical
+        # FindingCandidate per page sharing it — all with the same
+        # dedup_key by design (that's what dedup_key means throughout this
+        # codebase: same key = same issue, not a separate one). Counting
+        # raw per-page duplicates as "N issue(s)" inflated a single real
+        # issue into what read like several distinct ones.
+        matched_by_host: dict[str, dict[str, object]] = {}
         for f in matched:
-            matched_by_host.setdefault(urlsplit(f.url).netloc.lower(), []).append(f)
+            host = urlsplit(f.url).netloc.lower()
+            matched_by_host.setdefault(host, {}).setdefault(f.dedup_key, f)
         out = []
         for pt in plan:
             ep = ctx.inventory.endpoint(pt.endpoint_id)
             host = urlsplit(ep.url).netloc.lower() if ep else ""
-            hits = matched_by_host.get(host, [])
+            hits = list(matched_by_host.get(host, {}).values())
             if hits:
                 worst = hits[0]
-                out.append(_exec(pt, TestStatus.VULNERABLE, confidence=worst.confidence,
-                                 evidence=f"{len(hits)} issue(s): {worst.title}", finding=worst))
+                hit_prefixes = {h.dedup_key.split("|", 1)[0] for h in hits}
+                if hit_prefixes and hit_prefixes <= hardening_prefixes:
+                    out.append(_exec(pt, TestStatus.HARDENING, confidence=worst.confidence,
+                                     evidence=f"{len(hits)} issue(s): {worst.title} — a "
+                                              "confirmed hardening gap, not independently "
+                                              "exploitable.", finding=worst))
+                else:
+                    out.append(_exec(pt, TestStatus.VULNERABLE, confidence=worst.confidence,
+                                     evidence=f"{len(hits)} issue(s): {worst.title}", finding=worst))
             elif matched:
                 # Other hosts had matches, this one didn't — genuinely
                 # never checked, not "checked and clean".
@@ -533,7 +561,9 @@ def _evidence_runner(prefixes, attack):
 
 
 async def run_security_misconfiguration(plan, ctx: AttackContext):
-    return await _evidence_runner(_MISCONFIG_PREFIXES, C.SECURITY_MISCONFIGURATION)(plan, ctx)
+    return await _evidence_runner(
+        _MISCONFIG_PREFIXES, C.SECURITY_MISCONFIGURATION, hardening_prefixes=_HARDENING_PREFIXES
+    )(plan, ctx)
 
 
 async def run_sensitive_info(plan, ctx: AttackContext):
@@ -545,8 +575,19 @@ async def run_vhost_isolation(plan, ctx: AttackContext):
     out = []
     for pt in plan:
         if matched:
-            out.append(_exec(pt, TestStatus.VULNERABLE, confidence=matched[0].confidence,
-                             evidence=matched[0].title, finding=matched[0]))
+            # A distinct vhost being *observed* during passive discovery is
+            # not proof of an isolation failure — that requires demonstrating
+            # actual security impact (an access-control bypass, reaching an
+            # unintended internal application, password-reset URL poisoning,
+            # etc.), none of which this passive check establishes. Reporting
+            # VULNERABLE for every observed hostname is exactly the kind of
+            # manufactured certainty this scanner should avoid; POTENTIAL is
+            # the honest status until real impact is demonstrated.
+            out.append(_exec(pt, TestStatus.INCONCLUSIVE, confidence=matched[0].confidence,
+                             evidence=f"{matched[0].title} — observed via passive discovery "
+                                      "only; a distinct hostname responding is not itself "
+                                      "evidence of a security-relevant isolation failure.",
+                             finding=matched[0]))
         elif not ctx.vhosts:
             out.append(_exec(pt, TestStatus.NOT_APPLICABLE, evidence="No virtual hosts discovered."))
         else:
@@ -611,9 +652,9 @@ async def run_command_injection(plan, ctx: AttackContext):
         if ev:
             f = _finding(C.COMMAND_INJECTION, ep, pm, "Command Injection", "critical", ev, payload, base, test,
                          f"cmd_injection|{ep.normalized_route}|{pm.location}:{pm.name}")
-            anom, _ = anomaly.probe_anomaly(base, test, signal_matched=True)
+            anom, anom_factors = anomaly.probe_anomaly(base, test, signal_matched=True)
             return _exec(pt, TestStatus.VULNERABLE, confidence="potential", evidence=str(ev)[:200],
-                         finding=f, anomaly=anom)
+                         finding=f, anomaly=anom, anomaly_factors=anom_factors)
         return _exec(pt, TestStatus.NOT_VULNERABLE, confidence="potential",
                      evidence="No OS command output observed after injection.")
 

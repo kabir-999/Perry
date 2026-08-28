@@ -44,6 +44,12 @@ class TestExecution:
     # Measured baseline-vs-fuzz anomaly magnitude in [0,1]; 0.0 when not
     # measured (the anomaly engine then derives it from the status).
     anomaly: float = 0.0
+    # The full factors dict from anomaly_engine.probe_anomaly() (signal,
+    # dissimilarity, length_delta, status_change, and the Jaccard audit
+    # trail) when a real baseline/fuzz comparison was measured — empty dict
+    # otherwise. Carried through to the structured log/API so the objective
+    # body-dissimilarity measurement is auditable, not just a bare number.
+    anomaly_factors: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -179,6 +185,8 @@ def _log_executions(
         event = alog.event_for_status(e.status)
         if e.status == TestStatus.VULNERABLE:
             message = f"VULNERABLE — {display} detected on {target_desc}."
+        elif e.status == TestStatus.HARDENING:
+            message = f"HARDENING — {display} found a non-exploitable gap on {target_desc}."
         elif e.status == TestStatus.NOT_VULNERABLE:
             message = f"{display} executed on {target_desc}; target not vulnerable."
         elif e.status == TestStatus.INCONCLUSIVE:
@@ -203,6 +211,12 @@ def _log_executions(
                 "endpoint_id": e.endpoint_id,
                 "parameter_id": e.parameter_id,
                 "has_finding": finding is not None,
+                # Auditable Jaccard body-dissimilarity trail when a real
+                # baseline/fuzz comparison was measured — absent (not just
+                # zeroed) when no comparison happened, so a genuine "bodies
+                # were identical" (all-zero dissimilarity) can't be confused
+                # with "no comparison was made at all".
+                **({"anomaly_factors": e.anomaly_factors} if e.anomaly_factors else {}),
             },
         )
 

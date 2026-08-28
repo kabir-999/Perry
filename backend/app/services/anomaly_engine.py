@@ -28,22 +28,43 @@ near 0 means it behaved essentially identically to baseline.
 from __future__ import annotations
 
 from app.services.attacks import catalog as C
-from app.services.response_analyzer import AnalyzedResponse, jaccard
+from app.services.response_analyzer import SHINGLE_SIZE, AnalyzedResponse, jaccard_detail
 from app.services.test_status import TestStatus
+
+# Metric identity for scan metadata / API auditing (§3 of the Jaccard spec):
+# every consumer of a probe's anomaly factors can see exactly which formula
+# and shingle size produced the body-dissimilarity number.
+ANOMALY_METRIC = "jaccard_shingle_dissimilarity"
 
 # Statuses that represent an executed comparison (baseline vs fuzz actually
 # happened, or a definite outcome was reached). NOT_TESTED / NOT_APPLICABLE are
 # excluded from anomaly scoring entirely — no comparison took place, so scoring
 # them would be dishonest.
-_SCORABLE = {TestStatus.VULNERABLE, TestStatus.NOT_VULNERABLE, TestStatus.INCONCLUSIVE}
+_SCORABLE = {
+    TestStatus.VULNERABLE, TestStatus.NOT_VULNERABLE,
+    TestStatus.INCONCLUSIVE, TestStatus.HARDENING,
+}
 
 # Outcome-derived anomaly when no measured response diff is available.
 _STATUS_ANOMALY = {
     TestStatus.VULNERABLE: 0.90,
     TestStatus.INCONCLUSIVE: 0.35,
+    # A confirmed hardening gap is a real, non-zero observation (unlike
+    # NOT_VULNERABLE's "nothing found") but nowhere near an exploit — well
+    # below INCONCLUSIVE's "something suspicious we couldn't resolve."
+    TestStatus.HARDENING: 0.25,
     TestStatus.NOT_VULNERABLE: 0.05,
 }
 _CONFIDENCE_MULT = {"confirmed": 1.0, "potential": 0.95, "uncertain": 0.85, "": 0.9}
+# Evidence-driven modules (security misconfiguration, sensitive-info,
+# vhost/subdomain checks) have no baseline/fuzz pair to measure a real
+# diff from, so every VULNERABLE execution fell back to the same flat 0.90
+# regardless of what was actually found — a confirmed low-severity "missing
+# security headers" finding scored identically to a critical one. Scaling
+# by the underlying finding's own severity keeps a genuinely dangerous
+# evidence-driven finding at full weight while a low/info one no longer
+# reads as "critical" in the anomaly score.
+_SEVERITY_MULT = {"critical": 1.0, "high": 0.85, "medium": 0.65, "low": 0.4, "info": 0.2}
 
 # Weights for the measured per-probe anomaly components. `signal` (the detector
 # fired) dominates; the response-diff components add magnitude.
@@ -79,15 +100,31 @@ def probe_anomaly(
     Combines whether the attack's detector fired (`signal_matched`) with the
     measured divergence of the fuzz response from the baseline: body
     dissimilarity (1 − Jaccard over content shingles), relative length change,
-    and status-code change. Returns (score, factors) where factors records each
-    component for transparent reporting.
+    and status-code change — each kept as its own separate factor, never
+    folded into the others. Returns (score, factors); factors carries the
+    full Jaccard audit trail (shingle counts, intersection, union, the raw
+    jaccard/dissimilarity, and the body-only anomaly score = 100 ×
+    dissimilarity) alongside the blended per-probe score, so the objective
+    body-dissimilarity measurement is always independently inspectable and
+    never mutated by the other components.
     """
     signal = 1.0 if signal_matched else 0.0
     dissim = 0.0
     length = 0.0
     status = 0.0
+    jaccard_audit: dict = {
+        "metric": ANOMALY_METRIC, "shingle_size": SHINGLE_SIZE,
+        "baseline_shingle_count": 0, "fuzz_shingle_count": 0,
+        "intersection": 0, "union": 0, "jaccard": 1.0,
+        "body_dissimilarity": 0.0, "body_anomaly_score": 0,
+    }
     if baseline is not None and fuzz is not None:
-        dissim = 1.0 - jaccard(baseline.shingles, fuzz.shingles)
+        detail = jaccard_detail(baseline.shingles, fuzz.shingles)
+        dissim = detail["body_dissimilarity"]
+        jaccard_audit.update(detail)
+        jaccard_audit["metric"] = ANOMALY_METRIC
+        jaccard_audit["shingle_size"] = SHINGLE_SIZE
+        jaccard_audit["body_anomaly_score"] = round(100 * dissim)
         b_len = baseline.length or 0
         f_len = fuzz.length or 0
         denom = max(b_len, f_len, 1)
@@ -104,15 +141,28 @@ def probe_anomaly(
         "dissimilarity": round(dissim, 3),
         "length_delta": round(length, 3),
         "status_change": round(status, 3),
+        "status_changed": bool(
+            baseline is not None and fuzz is not None
+            and baseline.status_code != fuzz.status_code
+        ),
+        "redirect_changed": bool(
+            baseline is not None and fuzz is not None
+            and baseline.redirected != fuzz.redirected
+        ),
+        # Full Jaccard audit trail — independent of, and never adjusted by,
+        # the signal/length/status components above. body_anomaly_score is
+        # exactly 100 * body_dissimilarity; nothing else feeds into it.
+        "jaccard_audit": jaccard_audit,
     }
     return score, factors
 
 
-def status_anomaly(status: str, confidence: str = "") -> float:
+def status_anomaly(status: str, confidence: str = "", severity: str = "") -> float:
     """Outcome-derived anomaly when no measured response diff exists."""
     base = _STATUS_ANOMALY.get(status, 0.0)
-    if status == TestStatus.VULNERABLE:
-        return _clamp01(base * _CONFIDENCE_MULT.get(confidence, 0.9))
+    if status in (TestStatus.VULNERABLE, TestStatus.HARDENING):
+        severity_mult = _SEVERITY_MULT.get(severity, 1.0) if severity else 1.0
+        return _clamp01(base * _CONFIDENCE_MULT.get(confidence, 0.9) * severity_mult)
     return base
 
 
@@ -123,7 +173,9 @@ def _exec_anomaly(execution) -> float | None:
     measured = getattr(execution, "anomaly", 0.0) or 0.0
     if measured > 0.0:
         return _clamp01(measured)
-    return status_anomaly(execution.status, execution.confidence)
+    finding = getattr(execution, "finding", None)
+    severity = getattr(finding, "severity", "") if finding is not None else ""
+    return status_anomaly(execution.status, execution.confidence, severity)
 
 
 def _level(score_0_100: float) -> str:
@@ -229,4 +281,11 @@ def compute_anomaly(executions: list) -> dict:
             "top_domain_score": 0,
         }
 
-    return {"overall": overall, "domains": domains}
+    return {
+        "overall": overall,
+        "domains": domains,
+        # Documents the objective metric backing every measured (non
+        # outcome-derived) score above, so the scan's anomaly numbers are
+        # auditable against the exact formula that produced them.
+        "metric_metadata": {"metric": ANOMALY_METRIC, "shingle_size": SHINGLE_SIZE},
+    }

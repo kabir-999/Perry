@@ -7,6 +7,11 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg>=0.29.0
 alembic==1.14.0
 
+# IAM auth token generation for Aurora Serverless express-configuration
+# clusters (DATABASE_IAM_AUTH=true) — a local SigV4 signing call, no extra
+# runtime dependency weight beyond the package itself.
+boto3==1.35.94
+
 httpx==0.28.1
 beautifulsoup4==4.12.3
 dnspython==2.7.0

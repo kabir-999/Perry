@@ -176,12 +176,20 @@ def plan_tests(
         add(C.NOSQL_INJECTION, login_ep or anchor, None, "login endpoint — NoSQL operator-injection bypass")
 
     # --- Subdomain Takeover ---
-    for sub in inventory.subdomains:
-        # Anchor to a synthetic reference via the first endpoint; the module
-        # reads inventory.subdomains directly.
-        if inventory.endpoints:
-            add(C.SUBDOMAIN_TAKEOVER, inventory.endpoints[0], None,
-                f"discovered subdomain {getattr(sub, 'hostname', sub)}")
+    # One execution summarises the whole sweep (the runner reads
+    # inventory.subdomains directly, not this anchor's URL) — but the anchor
+    # itself needs to be one of the actual discovered subdomains, not an
+    # unrelated already-existing page endpoint. Anchoring to
+    # inventory.endpoints[0] used to make the log/UI show something like
+    # "Subdomain Takeover on GET https://example.com/some/random/page",
+    # which reads as testing that page for takeover — never true, and
+    # confusing (reported as a false-positive-looking mismatch).
+    if inventory.subdomains:
+        sub = inventory.subdomains[0]
+        hostname = getattr(sub, "hostname", str(sub))
+        anchor_ep = inventory.add_endpoint(f"https://{hostname}")
+        add(C.SUBDOMAIN_TAKEOVER, anchor_ep, None,
+            f"{len(inventory.subdomains)} discovered subdomain(s), starting with {hostname}")
 
     for attack in C.ALL_ATTACKS:
         n = sum(1 for p in plan if p.attack == attack)
