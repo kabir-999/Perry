@@ -1,0 +1,101 @@
+.chroma-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), 1fr);
+  gap: 1.25rem;
+  --x: 50%;
+  --y: 50%;
+}
+
+.chroma-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 2px solid var(--card-border);
+  background: var(--card-gradient);
+  transition: transform 0.3s ease;
+}
+
+.chroma-card:hover {
+  transform: translateY(-4px);
+}
+
+.chroma-img-wrapper {
+  position: absolute;
+  inset: 0;
+}
+
+.chroma-img-wrapper img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.chroma-info {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 0.9rem 1rem;
+  background: linear-gradient(to top, rgba(18, 51, 49, 0.85), transparent);
+  color: #fff;
+}
+
+.chroma-info .name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.chroma-info .handle {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.chroma-info .role {
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.chroma-info .location {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+
+.chroma-overlay,
+.chroma-fade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.chroma-overlay {
+  background: radial-gradient(var(--r) circle at var(--x) var(--y), transparent 0%, rgba(18, 51, 49, 0.35) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.chroma-grid:hover .chroma-overlay {
+  opacity: 1;
+}
+
+.chroma-fade {
+  background: radial-gradient(var(--r) circle at var(--x) var(--y), rgba(238, 248, 245, 0.5) 0%, transparent 70%);
+}
+
+@media (max-width: 768px) {
+  .chroma-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .chroma-grid {
+    grid-template-columns: 1fr;
+  }
+}

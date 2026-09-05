@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import CardSwap, { Card } from "../components/CardSwap";
+import ChromaGrid, { type ChromaItem } from "../components/ChromaGrid";
+import FlowingMenu from "../components/FlowingMenu";
 import Footer from "../components/Footer";
 import MarketingHeader from "../components/MarketingHeader";
 import PerryLogoMark from "../components/PerryLogoMark";
 import Reveal from "../components/Reveal";
+import { Terminal } from "../components/ui/terminal";
 import kabirPhoto from "../Team/Kabir.jpeg";
 import aayushPhoto from "../Team/aayush.jpeg";
 import aagnyaPhoto from "../Team/Aagnya.jpeg";
@@ -52,27 +56,24 @@ const FEATURES = [
 ];
 
 const STEPS = [
-  "Enter your target",
-  "Perry discovers the attack surface",
-  "Security tests are executed",
-  "Findings are validated",
-  "Developers receive actionable evidence",
+  { label: "Enter your target", color: "#08756f" },
+  { label: "Perry discovers the attack surface", color: "#8d5428" },
+  { label: "Security tests are executed", color: "#12b3ad" },
+  { label: "Findings are validated", color: "#4b2104" },
+  { label: "Developers receive actionable evidence", color: "#254c48" },
 ];
 
-const PRINCIPLES = [
-  {
-    title: "Evidence over noise",
-    body: "Every finding ships with the request, response, and reasoning behind it — no unverified scanner output.",
-  },
-  {
-    title: "Fits your workflow",
-    body: "Scan a deployed URL from the browser, or run the CLI locally and in CI, without changing how your team already ships.",
-  },
-  {
-    title: "Built for teams without a security team",
-    body: "Perry discovers the attack surface, tests it, and hands developers fixes they can act on directly.",
-  },
+const TERMINAL_COMMANDS = [
+  "pip install perry-spies",
+  "perry scan https://example.com",
+  "perry report --format pdf",
 ];
+
+const TERMINAL_OUTPUTS = {
+  0: ["Successfully installed perry-spies-1.0.0"],
+  1: ["✔ Discovered 42 endpoints", "✔ Found 3 potential issues"],
+  2: ["✔ Report saved to report.pdf"],
+};
 
 // `zoom`/`position` crop the full photo into the small circular thumbnail
 // via CSS (transform-origin pinned near the face) — approved as-is for
@@ -96,6 +97,22 @@ const TEAM: {
   { name: "Chaahat Singh", photo: chaahatPhoto },
   { name: "Daksh Goyal", photo: dakshPhoto, avatar: dakshAvatar },
 ];
+
+const TEAM_COLORS = ["#08756f", "#8d5428", "#12b3ad", "#4b2104", "#254c48", "#6f3f1f"];
+
+const TEAM_ITEMS: ChromaItem[] = TEAM.map((member, i) => {
+  const { name, photo, avatar, zoom, position } = member;
+  const borderColor = TEAM_COLORS[i % TEAM_COLORS.length];
+  return {
+    image: (avatar ?? photo)!,
+    title: name,
+    borderColor,
+    gradient: `linear-gradient(160deg, ${borderColor}, #123331)`,
+    imageStyle: avatar
+      ? undefined
+      : { objectPosition: position ?? "50% 50%", transform: zoom ? `scale(${zoom})` : undefined },
+  };
+});
 
 export default function Home() {
   // A brief, full-screen reveal of the Perry logo mark on first load — the
@@ -145,15 +162,10 @@ export default function Home() {
       <MarketingHeader />
       <div className="h-16 sm:h-[4.25rem]" aria-hidden="true" />
 
-      <div className="mx-auto max-w-7xl px-6 pb-12 sm:px-8 lg:px-12">
-        <div className="flex min-h-[calc(100vh-4.5rem)] flex-col justify-center">
-        <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.7fr)]">
+      <div className="mx-auto max-w-7xl px-6 pb-12 pt-8 sm:px-8 lg:px-12">
+        <div className="grid items-start gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.7fr)]">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#08756f]">
-              Security scanning for teams without a security team
-            </p>
-
-            <h1 className="mt-4 max-w-4xl break-words text-4xl font-black uppercase leading-[1.03] tracking-normal text-[#4b2104] sm:text-5xl lg:text-6xl xl:text-7xl">
+            <h1 className="max-w-4xl break-words text-4xl font-black uppercase leading-[1.03] tracking-normal text-[#4b2104] sm:text-5xl lg:text-6xl xl:text-7xl">
               <TypewriterHeadline lines={HEADLINE_LINES} start={!introVisible} />
             </h1>
 
@@ -179,182 +191,126 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-4 shadow-sm">
-            <div className="space-y-2">
-              {WORKFLOW.map((item, index) => (
-                <div key={item.label}>
-                  <div className="flex items-center gap-3 rounded-lg border border-[#d5e7e2] bg-white/70 p-3">
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#dff0ec] text-[10px] font-black text-[#08756f]">
-                      {item.icon}
+          <div className="relative h-[440px]">
+            <CardSwap width={440} height={320} cardDistance={70} verticalDistance={80} delay={4000}>
+              {WORKFLOW.map((item) => (
+                <Card key={item.label} className="flex flex-col gap-4 p-7">
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-[#dff0ec] text-xs font-black text-[#08756f]">
+                    {item.icon}
+                  </span>
+                  <p className="text-lg font-bold uppercase tracking-wide text-[#123331]">
+                    {item.label}
+                  </p>
+                  <p className="text-sm leading-relaxed text-[#4f716c]">
+                    {item.body}
+                  </p>
+                </Card>
+              ))}
+            </CardSwap>
+          </div>
+        </div>
+
+        <Reveal id="about" className="mt-24 scroll-mt-24 text-center">
+          <h2 className="text-4xl font-black uppercase tracking-tight text-[#08756f] sm:text-5xl">
+            About Us
+          </h2>
+
+          <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[#4f716c]">
+            Perry discovers, tests, and validates vulnerabilities across a
+            deployed site or codebase, then reports findings developers can
+            act on immediately — as a hosted app or as the perry-spies CLI.
+          </p>
+
+          <div id="how-it-works" className="mt-12 scroll-mt-24 text-left">
+            <div className="flex flex-wrap items-center justify-center sm:flex-nowrap">
+              {STEPS.map((step, i) => (
+                <div key={step.label} className="flex items-center">
+                  <span
+                    className="grid h-36 w-36 shrink-0 place-items-center rounded-full border-2 bg-white p-4 text-center text-xs font-semibold text-[#254c48]"
+                    style={{ borderColor: step.color }}
+                  >
+                    {step.label}
+                  </span>
+                  {i < STEPS.length - 1 && (
+                    <span
+                      className="-mx-2 shrink-0 text-xl"
+                      style={{ color: step.color }}
+                      aria-hidden="true"
+                    >
+                      →
                     </span>
-                    <div>
-                      <p className="text-sm font-bold uppercase tracking-wide text-[#123331]">
-                        {item.label}
-                      </p>
-                      <p className="text-xs leading-relaxed text-[#4f716c]">
-                        {item.body}
-                      </p>
-                    </div>
-                  </div>
-                  {index < WORKFLOW.length - 1 && (
-                    <div className="flex justify-center py-1 text-xs font-bold text-[#8fbab1]">
-                      |
-                    </div>
                   )}
                 </div>
               ))}
             </div>
           </div>
-        </div>
+        </Reveal>
+
+        <div className="mt-24">
+          <Reveal className="rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-5 sm:p-6">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#08756f]">
+              Two ways to run Perry
+            </p>
+            <div className="mt-4 grid gap-6 lg:grid-cols-2 lg:items-center">
+              <Terminal
+                commands={TERMINAL_COMMANDS}
+                outputs={TERMINAL_OUTPUTS}
+                typingSpeed={45}
+                delayBetweenCommands={1000}
+              />
+
+              <div className="text-left">
+                <h3 className="text-2xl font-black uppercase tracking-tight text-[#123331]">
+                  How to use
+                </h3>
+                <p className="mt-4 text-sm leading-relaxed text-[#4f716c]">
+                  Install perry-spies from PyPI to scan locally or in CI, or
+                  sign in and scan a deployed target straight from the
+                  browser — no install required.
+                </p>
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <Link
+                    to="/install"
+                    className="inline-flex h-11 items-center justify-center rounded-lg bg-[#8d5428] px-5 text-sm font-bold uppercase tracking-wide text-white shadow-sm transition-colors hover:bg-[#6f3f1f]"
+                  >
+                    Install Package
+                  </Link>
+                  <Link
+                    to="/login?next=%2Fscans%2Fnew"
+                    className="inline-flex h-11 items-center justify-center rounded-lg border border-[#8fbab1] bg-[#fbf7ef] px-5 text-sm font-bold uppercase tracking-wide text-[#123331] transition-colors hover:border-[#08756f]"
+                  >
+                    Start a Scan
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </Reveal>
+
+          <Reveal className="mt-10" delay={80}>
+            <div style={{ height: 400, position: "relative" }}>
+              <FlowingMenu
+                items={FEATURES.map((text) => ({ text }))}
+                speed={15}
+                textColor="#eef8f5"
+                bgColor="#123331"
+                marqueeBgColor="#12b3ad"
+                marqueeTextColor="#123331"
+                borderColor="#2b5450"
+              />
+            </div>
+          </Reveal>
         </div>
 
-        <div
-          id="about"
-          className="mt-10 scroll-mt-24 rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-5 sm:p-6"
-        >
+        <div className="mt-24">
           <Reveal>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#08756f]">
-              About Perry
-            </p>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#4f716c]">
-              Perry discovers, tests, and validates vulnerabilities across a
-              deployed site or codebase, then reports findings developers can
-              act on immediately — as a hosted app or as the perry-spies CLI.
-            </p>
-          </Reveal>
-
-          <Reveal delay={200}>
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              {PRINCIPLES.map((principle) => (
-                <div
-                  key={principle.title}
-                  className="rounded-lg border border-[#d5e7e2] bg-white/70 p-4"
-                >
-                  <p className="text-sm font-bold uppercase tracking-wide text-[#123331]">
-                    {principle.title}
-                  </p>
-                  <p className="mt-2 text-xs leading-relaxed text-[#4f716c]">
-                    {principle.body}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            <p className="mt-8 text-xs font-bold uppercase tracking-[0.2em] text-[#08756f]">
               The team
             </p>
-            <div className="mt-4 grid gap-4 sm:grid-cols-3">
-              {TEAM.map((member) => {
-                const { name, photo, avatar, zoom, position } = member;
-                const thumb = avatar ?? photo;
-                return (
-                  <div
-                    key={name}
-                    className="rounded-lg border border-[#d5e7e2] bg-white/70 p-4 text-center"
-                  >
-                    {thumb ? (
-                      <span className="mx-auto grid h-16 w-16 overflow-hidden rounded-full border border-[#8fbab1]">
-                        <img
-                          src={thumb}
-                          alt={name}
-                          className="h-full w-full object-cover"
-                          style={
-                            avatar
-                              ? undefined
-                              : {
-                                  objectPosition: position ?? "50% 50%",
-                                  transform: zoom ? `scale(${zoom})` : undefined,
-                                }
-                          }
-                        />
-                      </span>
-                    ) : (
-                      <div className="mx-auto grid h-16 w-16 place-items-center rounded-full border border-dashed border-[#8fbab1] bg-[#dff0ec] text-[9px] font-bold uppercase tracking-wide text-[#08756f]">
-                        Photo
-                      </div>
-                    )}
-                    <p className="mt-3 text-sm font-bold text-[#123331]">
-                      {name}
-                    </p>
-                  </div>
-                );
-              })}
+            <div className="mt-4">
+              <ChromaGrid items={TEAM_ITEMS} radius={280} columns={3} rows={2} />
             </div>
           </Reveal>
         </div>
-
-        <Reveal className="mt-10 rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#08756f]">
-            Two ways to run Perry
-          </p>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col justify-between gap-4 rounded-lg border border-[#d5e7e2] bg-white/70 p-4">
-              <div>
-                <p className="text-sm font-bold uppercase tracking-wide text-[#123331]">
-                  CLI package
-                </p>
-                <p className="mt-1 text-sm leading-relaxed text-[#4f716c]">
-                  Install perry-spies from PyPI and run scans locally or in
-                  CI.
-                </p>
-              </div>
-              <Link
-                to="/install"
-                className="inline-flex h-11 items-center justify-center rounded-lg bg-[#8d5428] px-5 text-sm font-bold uppercase tracking-wide text-white shadow-sm transition-colors hover:bg-[#6f3f1f]"
-              >
-                How to install the package
-              </Link>
-            </div>
-
-            <div className="flex flex-col justify-between gap-4 rounded-lg border border-[#d5e7e2] bg-white/70 p-4">
-              <div>
-                <p className="text-sm font-bold uppercase tracking-wide text-[#123331]">
-                  Hosted app
-                </p>
-                <p className="mt-1 text-sm leading-relaxed text-[#4f716c]">
-                  Sign in and scan a deployed target from the browser — no
-                  install required.
-                </p>
-              </div>
-              <Link
-                to="/login?next=%2Fscans%2Fnew"
-                className="inline-flex h-11 items-center justify-center rounded-lg border border-[#8fbab1] bg-[#fbf7ef] px-5 text-sm font-bold uppercase tracking-wide text-[#123331] transition-colors hover:border-[#08756f]"
-              >
-                Checkout the website version
-              </Link>
-            </div>
-          </div>
-        </Reveal>
-
-        <Reveal className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-5" delay={80}>
-          {FEATURES.map((feature) => (
-            <div
-              key={feature}
-              className="rounded-lg border border-[#b9d6cf] bg-[#fbf7ef] px-4 py-3 text-center text-xs font-bold uppercase tracking-wide text-[#254c48]"
-            >
-              {feature}
-            </div>
-          ))}
-        </Reveal>
-
-        <Reveal
-          id="how-it-works"
-          className="mt-10 scroll-mt-24 rounded-xl border border-[#b9d6cf] bg-[#fbf7ef] p-5"
-        >
-          <h2 className="text-lg font-bold text-[#123331]">How it works</h2>
-          <div className="mt-4 grid gap-3 md:grid-cols-5">
-            {STEPS.map((step, index) => (
-              <div key={step} className="rounded-lg bg-[#eef8f5] p-4">
-                <p className="text-xs font-bold text-[#8d5428]">
-                  {String(index + 1).padStart(2, "0")}
-                </p>
-                <p className="mt-2 text-sm font-semibold text-[#254c48]">
-                  {step}
-                </p>
-              </div>
-            ))}
-          </div>
-        </Reveal>
       </div>
 
       <Footer />
