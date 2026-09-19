@@ -1,0 +1,3 @@
+perry-spy.duckdns.org {
+	reverse_proxy frontend:80
+}
